@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XRD Studio</title>
+<meta name="description" content="同步輻射 / In-house XRD 波長轉換與期刊級繪圖工具，所有運算在瀏覽器中進行。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6.5' fill='%231d1d1f'/%3E%3Cpath d='M3.5 17.5h3.2l1.4-9.5 1.5 9.5h2l1.1-5.2 1.1 5.2h1.7l1-3.3 1 3.3h2.9' fill='none' stroke='white' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg-side:#f5f5f7; --stage:#e8e8ed; --panel:#ffffff; --text:#1d1d1f; --text2:#6e6e73; --text3:#8e8e93;
+  --line:rgba(60,60,67,.14); --line-strong:rgba(60,60,67,.28); --fill:rgba(118,118,128,.12); --fill2:rgba(118,118,128,.08);
+  --fill-hover:rgba(118,118,128,.2); --accent:#0071e3; --accent-hover:#0077ed; --accent-soft:rgba(0,113,227,.08);
+  --ring:rgba(0,113,227,.32); --green:#34c759; --orange:#ff9500; --red:#ff3b30; --seg-on:#ffffff;
+  --glass:rgba(245,245,247,.78);
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Segoe UI","PingFang TC","Microsoft JhengHei","Noto Sans TC",Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg-side:#111113; --stage:#050506; --panel:#1c1c1e; --text:#f5f5f7; --text2:#aeaeb2; --text3:#8e8e93;
+  --line:rgba(84,84,88,.5); --line-strong:rgba(120,120,128,.6); --fill:rgba(118,118,128,.24); --fill2:rgba(118,118,128,.16);
+  --fill-hover:rgba(118,118,128,.34); --accent:#0a84ff; --accent-hover:#409cff; --accent-soft:rgba(10,132,255,.14);
+  --ring:rgba(10,132,255,.45); --seg-on:#636366; --glass:rgba(17,17,19,.78);
+}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--font);background:var(--bg-side);color:var(--text);font-size:14px;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;overflow:hidden}
+[hidden]{display:none!important}
+button{font-family:inherit}
+.top{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 18px;background:var(--glass);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:.5px solid var(--line);z-index:5}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand svg{width:24px;height:24px;flex:none}
+.brand b{font-size:15px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+.brand .sub{color:var(--text3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.actions{display:flex;gap:8px;align-items:center;flex:none}
+.btn{appearance:none;border:0;background:var(--fill);color:var(--text);font:500 13px/1 var(--font);padding:8px 14px;border-radius:980px;cursor:pointer;transition:background .15s,transform .06s;white-space:nowrap}
+.btn:hover{background:var(--fill-hover)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.sm{padding:6px 11px;font-size:12px}
+.btn.danger{color:var(--red)}
+.btn.ghost{background:transparent;color:var(--accent);padding:6px 8px}
+.btn.ghost:hover{background:var(--accent-soft)}
+.app{flex:1;display:flex;min-height:0}
+.side{width:396px;flex:none;overflow-y:auto;overflow-x:hidden;border-right:.5px solid var(--line);background:var(--bg-side);scrollbar-width:thin}
+.tabs{position:sticky;top:0;z-index:4;padding:12px 16px;background:var(--glass);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px)}
+.pane{padding:6px 0 40px}
+.gwrap{margin:0 16px 22px}
+.gtitle{font-size:12px;font-weight:600;color:var(--text2);margin:0 4px 7px 14px;letter-spacing:.01em}
+.group{background:var(--panel);border-radius:12px;overflow:hidden}
+.gfoot{font-size:11.5px;color:var(--text3);margin:7px 14px 0;line-height:1.5}
+.row,.custom{position:relative}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:7px 14px}
+.group > :not([hidden]) ~ :not([hidden])::before{content:"";position:absolute;top:0;left:14px;right:0;height:.5px;background:var(--line);pointer-events:none}
+.row.stack{flex-direction:column;align-items:stretch;gap:8px;padding:10px 14px}
+.lbl{font-size:13.5px;line-height:1.3;min-width:0;flex:1}
+.lbl small{display:block;color:var(--text3);font-size:11.5px;margin-top:2px;line-height:1.35}
+.ctl{display:flex;align-items:center;gap:6px;flex:none}
+.row.stack .ctl{width:100%}
+.row.stack .ctl .seg{display:flex;width:100%}
+.row.stack .ctl .seg button{flex:1}
+.row.stack .ctl .text,.row.stack .ctl select{width:100%;max-width:none}
+.seg{display:inline-flex;background:var(--fill);border-radius:9px;padding:2px}
+.seg button{appearance:none;border:0;background:transparent;color:var(--text);font:500 12.5px/1 var(--font);padding:6px 10px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:background .15s,box-shadow .15s}
+.seg button:hover:not(.on){color:var(--text2)}
+.seg button.on{background:var(--seg-on);box-shadow:0 1px 2px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
+.seg.wide{display:flex}
+.seg.wide button{flex:1;padding:7px 4px}
+.num,.text,select,textarea{font:13px var(--font);color:var(--text);background:var(--fill2);border:0;border-radius:8px;outline:none;transition:box-shadow .15s}
+.num{width:80px;padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums}
+.num.sm{width:58px}
+.num::placeholder,.text::placeholder,textarea::placeholder{color:var(--text3)}
+.num:focus,.text:focus,select:focus,textarea:focus{box-shadow:0 0 0 3px var(--ring)}
+.unit{color:var(--text3);font-size:12px;min-width:12px}
+.text{width:200px;padding:7px 9px}
+select{appearance:none;-webkit-appearance:none;padding:6px 26px 6px 10px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238e8e93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;max-width:212px;cursor:pointer}
+textarea{width:100%;padding:9px 10px;resize:vertical;font-family:var(--mono);font-size:12px;line-height:1.55;min-height:40px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:112px;height:4px;background:var(--fill);border-radius:2px;outline:none;margin:0 4px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 .5px 4px rgba(0,0,0,.3),0 0 0 .5px rgba(0,0,0,.08);cursor:grab}
+input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radius:50%;background:#fff;box-shadow:0 .5px 4px rgba(0,0,0,.3)}
+.switch{-webkit-appearance:none;appearance:none;width:42px;height:25px;border-radius:13px;background:var(--fill);position:relative;cursor:pointer;transition:background .2s;flex:none;margin:0}
+.switch::before{content:"";position:absolute;top:2px;left:2px;width:21px;height:21px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.2),0 0 0 .5px rgba(0,0,0,.04);transition:transform .22s cubic-bezier(.3,.7,.4,1)}
+.switch:checked{background:var(--green)}
+.switch:checked::before{transform:translateX(17px)}
+.sw{width:22px;height:22px;border-radius:50%;background:var(--c,#999);position:relative;flex:none;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.18);display:inline-block}
+.sw input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;border:0;padding:0}
+.drop{display:flex;align-items:center;gap:12px;padding:14px;cursor:pointer;color:var(--text2);transition:background .15s}
+.drop:hover{background:var(--accent-soft)}
+.drop .dz{width:40px;height:40px;border-radius:10px;border:1.5px dashed var(--line-strong);display:grid;place-items:center;color:var(--accent);flex:none;transition:.15s}
+.drop:hover .dz,body.dragging .drop .dz{border-color:var(--accent);background:var(--accent-soft)}
+.drop b{display:block;font-size:13.5px;font-weight:500;color:var(--text)}
+.drop small{font-size:11.5px;color:var(--text3)}
+.drop svg{width:20px;height:20px}
+.file-row{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 14px;min-height:54px}
+.file.off .sw,.file.off .finfo{opacity:.38}
+.finfo{flex:1;min-width:0}
+.flabel{width:100%;border:0;background:transparent;font:500 13.5px var(--font);color:var(--text);padding:3px 6px;margin-left:-6px;border-radius:6px;outline:none;text-overflow:ellipsis}
+.flabel:hover{background:var(--fill2)}
+.flabel:focus{background:var(--fill2);box-shadow:0 0 0 3px var(--ring)}
+.fsub{font-size:11.5px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;gap:6px;align-items:center;margin-top:1px}
+.fsub i{width:6px;height:6px;border-radius:50%;background:var(--text3);flex:none}
+.fsub.conv i{background:var(--accent)}
+.fsub.conv b{color:var(--accent);font-weight:500}
+.icon{appearance:none;border:0;background:transparent;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--text2);cursor:pointer;flex:none;transition:background .12s}
+.icon:hover{background:var(--fill2);color:var(--text)}
+.icon svg{width:17px;height:17px;transition:transform .2s}
+.icon.open svg{transform:rotate(180deg)}
+.file-more{padding:0 14px 14px 46px}
+.kv{display:grid;grid-template-columns:1fr auto;gap:7px 10px;align-items:center;font-size:12.5px;color:var(--text2)}
+.kv .num{width:96px}
+.fmeta{font-size:11.5px;color:var(--text3);margin-top:10px;line-height:1.55;word-break:break-all}
+.fact{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.listbar{display:flex;gap:4px;justify-content:flex-end;padding:6px 10px}
+.muted{color:var(--text3);font-size:12.5px;padding:14px}
+.note-item{display:flex;gap:10px;padding:11px 14px;font-size:12.5px;line-height:1.5}
+.note-item .dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none;background:var(--accent)}
+.note-item.ok .dot{background:var(--green)}
+.note-item.warn .dot{background:var(--orange)}
+.note-item .x{margin-left:auto;align-self:flex-start;color:var(--text3);cursor:pointer;border:0;background:none;font-size:15px;line-height:1;padding:0 2px}
+.ref{padding:12px 14px}
+.ref-head{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.ref-head .text{flex:1;width:auto}
+.ref-opts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:9px;font-size:12px;color:var(--text2)}
+.addrow{padding:8px 10px}
+.stage{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--stage)}
+.canvas{flex:1;min-height:0;overflow:auto;display:flex;padding:28px;position:relative}
+.paper{background:#fff;box-shadow:0 0 0 .5px rgba(0,0,0,.08),0 12px 32px rgba(0,0,0,.10),0 2px 6px rgba(0,0,0,.05);border-radius:2px;flex:none;margin:auto;position:relative;overflow:hidden}
+.paper img{display:block;width:100%;height:100%;user-select:none;-webkit-user-drag:none}
+.pill{position:absolute;top:14px;right:16px;font-size:11.5px;color:var(--text2);background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);padding:6px 11px 6px 26px;border-radius:999px;box-shadow:0 0 0 .5px var(--line),0 4px 14px rgba(0,0,0,.08);z-index:3}
+.pill::before,.engine.loading::before{content:"";position:absolute;left:10px;top:50%;width:10px;height:10px;margin-top:-6px;border-radius:50%;border:1.6px solid var(--text3);border-top-color:transparent;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{margin:auto;text-align:center;color:var(--text2);max-width:460px;padding:20px}
+.empty .big{width:76px;height:76px;margin:0 auto 18px;border-radius:20px;background:var(--panel);display:grid;place-items:center;box-shadow:0 8px 24px rgba(0,0,0,.08);color:var(--accent)}
+.empty .big svg{width:36px;height:36px}
+.empty h2{font-size:22px;font-weight:600;color:var(--text);margin:0 0 8px;letter-spacing:-.02em}
+.empty p{margin:0 0 18px;font-size:13.5px;line-height:1.6}
+.engine{position:relative;display:inline-block;margin-top:18px;font-size:12px;color:var(--text3);padding-left:0}
+.engine.loading{padding-left:18px}
+.engine.loading::before{left:0}
+.engine.ready{color:var(--green)}
+.engine.error{color:var(--red);line-height:1.5}
+.foot{min-height:40px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 18px;color:var(--text3);font-size:12px;border-top:.5px solid var(--line);background:var(--glass)}
+.foot .seg button{padding:5px 9px;font-size:11.5px}
+.warns{color:var(--orange);font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}
+.dragmask{position:fixed;inset:0;background:rgba(0,113,227,.06);border:2px dashed var(--accent);border-radius:14px;z-index:50;display:none;pointer-events:none;margin:8px}
+body.dragging .dragmask{display:block}
+.toast{position:fixed;left:50%;bottom:58px;transform:translate(-50%,16px);background:rgba(29,29,31,.92);color:#fff;padding:11px 18px;border-radius:12px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;max-width:70vw;z-index:60;backdrop-filter:blur(10px);line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.err{background:rgba(215,0,21,.94)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6.5" fill="currentColor" style="color:var(--text)"/><path d="M3.5 17.5h3.2l1.4-9.5 1.5 9.5h2l1.1-5.2 1.1 5.2h1.7l1-3.3 1 3.3h2.9" fill="none" stroke="var(--bg-side)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    <b>XRD Studio</b><span class="sub">同步輻射 → In-house 波長轉換 · 期刊級繪圖</span>
+  </div>
+  <div class="actions">
+    <button class="btn" id="btnCsv" title="匯出所有檔案換算後的 CSV">匯出 CSV</button>
+    <button class="btn" id="btnZip" title="圖片 + CSV + 設定檔">全部匯出</button>
+    <button class="btn primary" id="btnFig" title="⌘/Ctrl + E">匯出圖片</button>
+  </div>
+</header>
+<div class="app">
+  <aside class="side" id="side">
+    <div class="tabs"><div class="seg wide" id="tabs">
+      <button type="button" data-tab="data" class="on">數據</button><button type="button" data-tab="style">樣式</button><button type="button" data-tab="axes">座標軸</button><button type="button" data-tab="text">文字</button><button type="button" data-tab="annot">標註</button><button type="button" data-tab="out">輸出</button>
+    </div></div>
+    <section class="pane" data-pane="data"></section>
+    <section class="pane" data-pane="style" hidden></section>
+    <section class="pane" data-pane="axes" hidden></section>
+    <section class="pane" data-pane="text" hidden></section>
+    <section class="pane" data-pane="annot" hidden></section>
+    <section class="pane" data-pane="out" hidden></section>
+  </aside>
+  <main class="stage">
+    <div class="canvas" id="canvas">
+      <span class="pill" id="busy" hidden>更新中</span>
+      <div class="empty" id="empty">
+        <div class="big"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></div>
+        <h2>拖放 XRD 檔案開始</h2>
+        <p>支援同步輻射 .xye / .xyn 與 In-house .txt / .xy / .dat / .csv，可一次多個。程式會自動判斷格式，需要時把 2θ 換算到 In-house 波長（Cu Kα₁ 1.540598 Å）。所有運算都在你的瀏覽器中進行，檔案不會上傳。</p>
+        <button class="btn primary" data-pick>選擇檔案</button><br>
+        <span class="engine loading" id="engine">正在載入繪圖引擎…</span>
+      </div>
+      <div class="paper" id="paper" hidden><img id="preview" alt=""></div>
+    </div>
+    <div class="foot">
+      <span id="dims"></span>
+      <span class="warns" id="warns"></span>
+      <div class="seg" id="zoomSeg"><button type="button" data-z="fit" class="on">符合視窗</button><button type="button" data-z="1">100%</button><button type="button" data-z="2">200%</button></div>
+    </div>
+  </main>
+</div>
+<div class="dragmask"></div>
+<div class="toast" id="toast"></div>
+<input type="file" id="fileInput" multiple hidden>
+<input type="file" id="jsonInput" accept=".json" hidden>
+<input type="file" id="refInput" hidden>
+<script>
+"use strict";
+const VERSION = "2.0";
+/* 預設值 = Nature 單欄樣式（與 xrd_core.py 的 DEFAULTS 相同） */
+const DEFAULTS = {
+  src_wl:0.77491,
+  smooth:"none", smooth_win:7, smooth_order:2, bg:"none", bg_width:1.5, transform:"linear",
+  norm:"max", norm_scope:"view", norm_x1:null, norm_x2:null,
+  mode:"stack", stack_method:"equal", stack_spacing:1.1, stack_gap:0.08, first_on_top:true,
+  palette:"okabe", lw:0.75, fill:false, fill_alpha:0.15,
+  label_mode:"auto", clabel_pos:"right", clabel_pad:0.06, clabel_color:true,
+  legend_loc:"upper right", legend_frame:false, legend_ncol:1, legend_handle:1.6,
+  xlabel:"2θ (°)", ylabel:"Intensity (a.u.)", xmin:null, xmax:null, x_major:null, x_minor:2,
+  y_ticks:false, y_ticklabels:false, ymargin_top:0.06, ymargin_bottom:0.03,
+  frame:"box", tick_dir:"in", tick_top:false, tick_right:false, tick_major_len:3.0, tick_minor_len:1.6, tick_width:0.5, spine_lw:0.5,
+  grid:"none", sec_axis:"none",
+  font:"Arial", fs_label:7, fs_tick:6, fs_legend:6, fs_annot:6, label_bold:false, theta_italic:true,
+  title:"", title_fs:7, panel_label:"", panel_pos:"tl_out", panel_fs:8, panel_bold:true,
+  peaks:"", peak_rot:"90", peak_color:"curve", peak_pad:0.04, peak_tol:0.3,
+  vlines:"", vline_style:"--", vline_color:"#8e8e93", vline_lw:0.5, spans:"", span_color:"#d1d1d6", span_alpha:0.35,
+  refs:[], ref_ratio:0.16, ref_name_pos:"right", ref_lw:0.75,
+  inset:false, inset_x1:null, inset_x2:null, inset_loc:"upper right", inset_w:0.36, inset_h:0.40, inset_mode:"overlay", inset_mark:true,
+  texts:"",
+  preset:"nature1", width_mm:89, height_mm:75, margins:"auto", m_left:12, m_right:3, m_top:3, m_bottom:10,
+  fmt:"png", dpi:600, transparent:false, fig_name:"XRD_figure", csv_trim:16, csv_header:false,
+};
+const _NAT = {font:"Arial", fs_label:7, fs_tick:6, fs_legend:6, fs_annot:6, title_fs:7, panel_fs:8, panel_bold:true, lw:0.75, spine_lw:0.5, tick_width:0.5, tick_major_len:3.0, tick_minor_len:1.6, dpi:600};
+const _ACS = {font:"Arial", fs_label:8, fs_tick:7, fs_legend:7, fs_annot:7, title_fs:8, panel_fs:9, panel_bold:true, lw:0.8, spine_lw:0.75, tick_width:0.75, tick_major_len:3.5, tick_minor_len:2.0, dpi:600};
+const _ELS = {font:"Arial", fs_label:7, fs_tick:7, fs_legend:7, fs_annot:7, title_fs:8, panel_fs:8, panel_bold:true, lw:0.75, spine_lw:0.6, tick_width:0.6, tick_major_len:3.0, tick_minor_len:1.6, dpi:1000};
+const PRESETS = {
+  nature1:{label:"Nature｜單欄 89 mm", width_mm:89, height_mm:75, ..._NAT},
+  nature2:{label:"Nature｜雙欄 183 mm", width_mm:183, height_mm:110, ..._NAT},
+  acs1:{label:"ACS｜單欄 3.25 in", width_mm:82.55, height_mm:70, ..._ACS},
+  acs2:{label:"ACS｜雙欄 7 in", width_mm:177.8, height_mm:105, ..._ACS},
+  els1:{label:"Elsevier｜單欄 90 mm", width_mm:90, height_mm:75, ..._ELS},
+  els15:{label:"Elsevier｜1.5 欄 140 mm", width_mm:140, height_mm:95, ..._ELS},
+  els2:{label:"Elsevier｜雙欄 190 mm", width_mm:190, height_mm:110, ..._ELS},
+  slide:{label:"簡報 / 海報 160 × 100 mm", width_mm:160, height_mm:100, font:"Arial", fs_label:14, fs_tick:12, fs_legend:12, fs_annot:12, title_fs:15, panel_fs:16, panel_bold:true, lw:1.5, spine_lw:1.2, tick_width:1.2, tick_major_len:5.0, tick_minor_len:3.0, dpi:300},
+};
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const clone = o => JSON.parse(JSON.stringify(o));
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const h = html => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+function pick(o){ const r = {}; for (const k in (o || {})) if (k in DEFAULTS) r[k] = o[k]; return r; }
+
+let S = clone(DEFAULTS);              // 每次開啟都從期刊樣式開始
+let ITEMS = [], INFO = {colors:{}, eff:{}}, NOTES = [], OPEN = new Set(), ZOOM = "fit", WARN = [];
+const UISTATE = {needwl:false};       // 介面條件（不送給 Python）
+
+const ICON = {
+  eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeoff:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.1 6.1C3.4 7.9 2 12 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.9-2.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+  chev:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+};
+
+/* ───────────────────── 介面結構 ───────────────────── */
+const num = (k, label, o = {}) => ({t:"num", k, label, ...o});
+const rng = (k, label, min, max, step, o = {}) => ({t:"range", k, label, min, max, step, ...o});
+const seg = (k, label, opts, o = {}) => ({t:"seg", k, label, opts, ...o});
+const tog = (k, label, o = {}) => ({t:"toggle", k, label, ...o});
+const sel = (k, label, opts, o = {}) => ({t:"select", k, label, opts, ...o});
+const txt = (k, label, o = {}) => ({t:"text", k, label, ...o});
+const area = (k, o = {}) => ({t:"area", k, ...o});
+const col = (k, label, o = {}) => ({t:"color", k, label, ...o});
+const cus = (id, o = {}) => ({t:"custom", id, ...o});
+const NULL = {nullable:true};
+
+const PAL_OPTS = [["okabe","Okabe–Ito（色盲友善）"],["npg","Nature 經典配色"],["viridis","Viridis 漸層（溫度 / 時間序列）"],["gray","灰階"],["black","全黑"]];
+const FONT_OPTS = [["Arial","Arial / Helvetica"],["Times New Roman","Times New Roman"]];
+const LEG_OPTS = [["upper right","右上"],["upper left","左上"],["lower right","右下"],["lower left","左下"],["center right","右側中間"],["best","自動最佳"],["outside right","圖框外右側"],["outside top","圖框外上方"]];
+const INSET_OPTS = [["upper right","右上"],["upper left","左上"],["upper center","上方中間"],["center right","右側中間"],["center left","左側中間"],["lower right","右下"],["lower left","左下"]];
+const PRESET_OPTS = Object.entries(PRESETS).map(([k, v]) => [k, v.label]).concat([["custom","自訂"]]);
+
+const UI = {
+  data: [
+    {title:"檔案", rows:[cus("dropzone"), cus("files")]},
+    {title:"檢查結果", id:"notesWrap", rows:[cus("notes")]},
+    {title:"同步輻射波長", show:"needwl", rows:[
+      num("src_wl","原始入射波長",{unit:"Å",step:0.00001,w:100,hint:".xye 檔內沒有記載波長，請確認與該次 beamtime 相同"}),
+    ]},
+    {title:"數據處理", rows:[
+      seg("smooth","平滑",[["none","無"],["ma","移動平均"],["sg","Savitzky–Golay"]],{wide:true}),
+      num("smooth_win","平滑視窗",{unit:"點",step:2,min:3,show:"smooth=ma|sg"}),
+      num("smooth_order","多項式階數",{step:1,min:1,max:6,show:"smooth=sg"}),
+      seg("bg","背景扣除",[["none","無"],["min","最小值歸零"],["snip","SNIP 演算法"]],{wide:true}),
+      num("bg_width","背景平滑寬度",{unit:"°",step:0.1,min:0.1,show:"bg=snip",hint:"大於峰寬的數倍；越大背景越平"}),
+      seg("transform","強度刻度",[["linear","線性"],["sqrt","平方根"],["log","log₁₀"]],{wide:true}),
+      sel("norm","正規化",[["none","不正規化"],["max","最大值 = 1"],["max100","最大值 = 100"],["minmax","最小–最大 (0–1)"],["area","面積 = 1"],["range","指定區間最大值 = 1"]]),
+      seg("norm_scope","正規化依據",[["view","顯示範圍"],["all","全部數據"]],{show:"norm=max|max100|minmax|area"}),
+      num("norm_x1","區間起點",{unit:"°",step:0.1,...NULL,show:"norm=range"}),
+      num("norm_x2","區間終點",{unit:"°",step:0.1,...NULL,show:"norm=range"}),
+    ]},
+  ],
+  style: [
+    {title:"期刊樣式", rows:[
+      sel("preset","套用期刊規格",PRESET_OPTS,{hint:"一次設定尺寸、字型、字級、線寬與解析度"}),
+    ]},
+    {title:"排列", rows:[
+      seg("mode","排列方式",[["stack","堆疊"],["overlay","重疊"]]),
+      seg("stack_method","間距",[["equal","等距"],["auto","自動避免重疊"]],{show:"mode=stack"}),
+      rng("stack_spacing","堆疊間距",0,3,0.05,{unit:"×",show:"mode=stack&stack_method=equal",hint:"以最大強度為單位"}),
+      rng("stack_gap","最小間隙",0,1,0.01,{unit:"×",show:"mode=stack&stack_method=auto"}),
+      tog("first_on_top","第一個檔案在最上方",{show:"mode=stack"}),
+    ]},
+    {title:"線條與顏色", rows:[
+      sel("palette","配色",PAL_OPTS),
+      rng("lw","線寬",0.2,3,0.05,{unit:"pt"}),
+      tog("fill","曲線下方填色"),
+      rng("fill_alpha","填色透明度",0.02,0.8,0.01,{show:"fill"}),
+    ], foot:"個別曲線的顏色可在「數據」頁點色塊修改。"},
+    {title:"曲線名稱", rows:[
+      seg("label_mode","標示方式",[["auto","自動"],["legend","圖例"],["curve","曲線旁"],["both","兩者"],["none","無"]],{wide:true}),
+      seg("clabel_pos","曲線名稱位置",[["right","右側"],["left","左側"],["outside","圖框外"]],{show:"label_mode=auto|curve|both"}),
+      rng("clabel_pad","與曲線距離",0,0.5,0.01,{unit:"×",show:"label_mode=auto|curve|both"}),
+      tog("clabel_color","名稱使用曲線顏色",{show:"label_mode=auto|curve|both"}),
+    ], foot:"自動：堆疊時把名稱寫在曲線旁，重疊時用圖例，只有一條曲線時不標示。"},
+    {title:"圖例", show:"label_mode=auto|legend|both", rows:[
+      sel("legend_loc","位置",LEG_OPTS),
+      tog("legend_frame","外框"),
+      num("legend_ncol","欄數",{step:1,min:1,max:8}),
+      num("legend_handle","線段長度",{step:0.1,min:0.3,max:5}),
+    ]},
+  ],
+  axes: [
+    {title:"X 軸 (2θ)", rows:[
+      txt("xlabel","軸標題",{stack:true}),
+      num("xmin","最小值",{unit:"°",step:0.5,...NULL}),
+      num("xmax","最大值",{unit:"°",step:0.5,...NULL}),
+      num("x_major","主刻度間距",{unit:"°",step:1,min:0,...NULL}),
+      num("x_minor","次刻度分割",{step:1,min:0,max:10,hint:"每個主刻度之間切幾格；0 或 1 = 不顯示"}),
+    ]},
+    {title:"Y 軸", rows:[
+      txt("ylabel","軸標題",{stack:true}),
+      tog("y_ticks","顯示刻度",{show:"frame=box|L"}),
+      tog("y_ticklabels","顯示刻度數值",{show:"y_ticks&frame=box|L"}),
+      rng("ymargin_top","上方留白",0,0.6,0.01,{unit:"×"}),
+      rng("ymargin_bottom","下方留白",0,0.4,0.01,{unit:"×"}),
+    ]},
+    {title:"外框與刻度", rows:[
+      seg("frame","外框",[["box","全框"],["L","L 形"],["bottom","僅底軸"]]),
+      seg("tick_dir","刻度方向",[["in","朝內"],["out","朝外"],["inout","穿越"]]),
+      tog("tick_top","上方也顯示刻度",{show:"frame=box&sec_axis=none"}),
+      tog("tick_right","右方也顯示刻度",{show:"frame=box&y_ticks"}),
+      num("tick_major_len","主刻度長度",{unit:"pt",step:0.25,min:0}),
+      num("tick_minor_len","次刻度長度",{unit:"pt",step:0.25,min:0}),
+      num("tick_width","刻度粗細",{unit:"pt",step:0.05,min:0.1}),
+      num("spine_lw","外框粗細",{unit:"pt",step:0.05,min:0.1}),
+    ]},
+    {title:"格線與次座標軸", rows:[
+      seg("grid","格線",[["none","無"],["major","主刻度"],["both","主 + 次"]]),
+      seg("sec_axis","上方次座標軸",[["none","無"],["d","d-spacing"],["q","q"]],{hint:"以 Cu Kα₁ 波長計算"}),
+    ]},
+  ],
+  text: [
+    {title:"字型", rows:[
+      sel("font","字型",FONT_OPTS),
+      num("fs_label","軸標題字級",{unit:"pt",step:0.5,min:3}),
+      num("fs_tick","刻度數值字級",{unit:"pt",step:0.5,min:3}),
+      num("fs_legend","圖例 / 曲線名稱字級",{unit:"pt",step:0.5,min:3}),
+      num("fs_annot","標註字級",{unit:"pt",step:0.5,min:3}),
+      tog("label_bold","軸標題粗體"),
+      tog("theta_italic","θ 使用斜體"),
+    ]},
+    {title:"標題", rows:[
+      txt("title","圖標題",{stack:true,ph:"期刊圖通常不放標題，留空即可"}),
+      num("title_fs","標題字級",{unit:"pt",step:0.5,min:3,show:"title"}),
+    ]},
+    {title:"分圖編號", rows:[
+      txt("panel_label","編號文字",{ph:"例如 a 或 (a)"}),
+      seg("panel_pos","位置",[["tl_out","左上框外"],["tl_in","左上框內"],["tr_in","右上框內"]],{show:"panel_label",wide:true}),
+      num("panel_fs","字級",{unit:"pt",step:0.5,min:3,show:"panel_label"}),
+      tog("panel_bold","粗體",{show:"panel_label"}),
+    ]},
+  ],
+  annot: [
+    {title:"峰位 / 晶面標註", rows:[
+      cus("peaktools"),
+      area("peaks",{rows:5,ph:"28.44, (111)\n47.30, (220)\n56.12, (311), 2\n31.70, [v]"}),
+      seg("peak_rot","文字方向",[["90","直式"],["0","橫式"]]),
+      seg("peak_color","顏色",[["curve","跟隨曲線"],["black","黑色"]]),
+      rng("peak_pad","與峰頂距離",0,0.4,0.01,{unit:"×"}),
+      num("peak_tol","峰頂搜尋範圍 ±",{unit:"°",step:0.05,min:0.01}),
+    ]},
+    {title:"參考線與區間", rows:[
+      {t:"area",k:"vlines",label:"垂直參考線 (2θ)",rows:2,ph:"28.44, 47.30"},
+      seg("vline_style","線型",[["--","虛線"],[":","點線"],["-.","點劃線"],["-","實線"]]),
+      col("vline_color","線條顏色"),
+      num("vline_lw","線寬",{unit:"pt",step:0.05,min:0.1}),
+      {t:"area",k:"spans",label:"陰影區間 (2θ)",rows:2,ph:"26.0-27.5\n44.2-45.0"},
+      col("span_color","陰影顏色"),
+      rng("span_alpha","陰影透明度",0.02,1,0.01),
+    ]},
+    {title:"標準卡片（ICDD / COD / 文獻）", rows:[cus("refs"),
+      rng("ref_ratio","面板高度",0.06,0.6,0.01,{unit:"×",hint:"相對主圖高度"}),
+      seg("ref_name_pos","名稱位置",[["left","左"],["right","右"]]),
+      num("ref_lw","線寬",{unit:"pt",step:0.05,min:0.1}),
+    ]},
+    {title:"放大插圖 (Inset)", rows:[
+      tog("inset","顯示放大插圖"),
+      num("inset_x1","2θ 起點",{unit:"°",step:0.1,...NULL,show:"inset"}),
+      num("inset_x2","2θ 終點",{unit:"°",step:0.1,...NULL,show:"inset"}),
+      sel("inset_loc","位置",INSET_OPTS,{show:"inset"}),
+      rng("inset_w","寬度",0.1,0.9,0.01,{unit:"×",show:"inset"}),
+      rng("inset_h","高度",0.1,0.9,0.01,{unit:"×",show:"inset"}),
+      seg("inset_mode","內容",[["overlay","重疊"],["stack","堆疊"],["same","同主圖"]],{show:"inset"}),
+      tog("inset_mark","在主圖標示放大區間",{show:"inset"}),
+    ]},
+    {title:"自由文字", rows:[
+      area("texts",{rows:3,ph:"0.04, 0.93, [v] Anatase\n0.04, 0.86, [o] Rutile, #D55E00"}),
+    ]},
+  ],
+  out: [
+    {title:"圖片尺寸", rows:[
+      num("width_mm","寬度",{unit:"mm",step:1,min:20}),
+      num("height_mm","高度",{unit:"mm",step:1,min:15}),
+      seg("margins","邊距",[["auto","自動緊貼"],["manual","固定 (mm)"]],{hint:"固定邊距可讓多張圖的座標框位置完全一致"}),
+      num("m_left","左",{unit:"mm",step:0.5,min:0,show:"margins=manual"}),
+      num("m_right","右",{unit:"mm",step:0.5,min:0,show:"margins=manual"}),
+      num("m_top","上",{unit:"mm",step:0.5,min:0,show:"margins=manual"}),
+      num("m_bottom","下",{unit:"mm",step:0.5,min:0,show:"margins=manual"}),
+    ]},
+    {title:"圖片格式", rows:[
+      seg("fmt","格式",[["png","PNG"],["tiff","TIFF"],["pdf","PDF"],["svg","SVG"],["eps","EPS"]],{wide:true}),
+      sel("dpi","解析度",[["300","300 dpi"],["600","600 dpi"],["1000","1000 dpi"],["1200","1200 dpi"]],{show:"fmt=png|tiff"}),
+      tog("transparent","透明背景",{show:"fmt=png|tiff|pdf|svg"}),
+      txt("fig_name","檔名"),
+    ]},
+    {title:"CSV 數據", rows:[
+      num("csv_trim","檔名去除末尾字元數",{step:1,min:0,hint:"與原程式相同（同步輻射檔）；預設 16 = 「_mar3450_A75.xye」"}),
+      tog("csv_header","第一列加入欄位名稱",{hint:"關閉時與原程式輸出完全相同"}),
+    ]},
+    {title:"設定檔", rows:[cus("settings")]},
+  ],
+};
+
+/* ───────────────────── 建立控制項 ───────────────────── */
+function buildRow(r){
+  if (r.t === "custom") { const el = h(`<div class="custom" id="${r.id}"></div>`); if (r.show) el.dataset.show = r.show; return el; }
+  if (r.t === "area") {
+    const el = h(`<div class="row stack">${r.label ? `<div class="lbl">${r.label}</div>` : ""}<textarea data-k="${r.k}" rows="${r.rows || 3}" placeholder="${esc(r.ph || "")}" spellcheck="false"></textarea></div>`);
+    if (r.show) el.dataset.show = r.show; return el;
+  }
+  const unit = r.unit ? `<span class="unit">${r.unit}</span>` : "";
+  const mm = `${r.min != null ? `min="${r.min}"` : ""} ${r.max != null ? `max="${r.max}"` : ""}`;
+  let c = "";
+  if (r.t === "num") c = `<input class="num" type="number" data-k="${r.k}" step="${r.step ?? "any"}" ${mm} ${r.nullable ? 'data-null="1" placeholder="自動"' : ""} ${r.w ? `style="width:${r.w}px"` : ""}>${unit}`;
+  else if (r.t === "range") c = `<input type="range" data-k="${r.k}" min="${r.min}" max="${r.max}" step="${r.step}"><input class="num sm" type="number" data-k="${r.k}" step="${r.step}">${unit}`;
+  else if (r.t === "seg") c = `<div class="seg" data-k="${r.k}">${r.opts.map(([v, l]) => `<button type="button" data-v="${esc(v)}">${l}</button>`).join("")}</div>`;
+  else if (r.t === "toggle") c = `<input type="checkbox" class="switch" data-k="${r.k}">`;
+  else if (r.t === "select") c = `<select data-k="${r.k}">${r.opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select>`;
+  else if (r.t === "text") c = `<input class="text" type="text" data-k="${r.k}" placeholder="${esc(r.ph || "")}" spellcheck="false">`;
+  else if (r.t === "color") c = `<label class="sw"><input type="color" data-k="${r.k}"></label>`;
+  const stack = r.stack || r.wide || (r.t === "seg" && r.opts.length > 3);
+  const el = h(`<div class="row${stack ? " stack" : ""}"><div class="lbl">${r.label}${r.hint ? `<small>${r.hint}</small>` : ""}</div><div class="ctl">${c}</div></div>`);
+  if (r.show) el.dataset.show = r.show;
+  return el;
+}
+function buildPanes(){
+  for (const [tab, groups] of Object.entries(UI)) {
+    const pane = $(`[data-pane="${tab}"]`);
+    for (const g of groups) {
+      const w = h(`<div class="gwrap">${g.title ? `<div class="gtitle">${g.title}</div>` : ""}<div class="group"></div>${g.foot ? `<div class="gfoot">${g.foot}</div>` : ""}</div>`);
+      if (g.id) w.id = g.id;
+      if (g.show) w.dataset.show = g.show;
+      const grp = w.querySelector(".group");
+      g.rows.forEach(r => grp.appendChild(buildRow(r)));
+      pane.appendChild(w);
+    }
+  }
+}
+
+/* ───────────────────── 設定綁定 ───────────────────── */
+function coerce(k, v){ const d = DEFAULTS[k]; if (typeof d === "number") { const f = parseFloat(v); return isFinite(f) ? f : d; } if (typeof d === "boolean") return v === true || v === "true"; return v; }
+function bindAll(){
+  $$("[data-k]").forEach(el => {
+    const k = el.dataset.k;
+    if (el.classList.contains("seg")) {
+      el.addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (b) setS(k, coerce(k, b.dataset.v), el); });
+    } else if (el.type === "checkbox") {
+      el.addEventListener("change", () => setS(k, el.checked, el));
+    } else if (el.type === "number" || el.type === "range") {
+      el.addEventListener("input", () => {
+        if (el.value === "") { if (el.dataset.null) setS(k, null, el); return; }
+        const v = parseFloat(el.value); if (isFinite(v)) setS(k, v, el);
+      });
+      el.addEventListener("blur", () => { if (el.value === "" && !el.dataset.null) syncControls(k); });
+    } else {
+      el.addEventListener("input", () => setS(k, coerce(k, el.value), el));
+    }
+  });
+}
+function setS(k, v, src){
+  S[k] = v;
+  if ((k === "width_mm" || k === "height_mm") && S.preset !== "custom") { S.preset = "custom"; syncControls("preset"); }
+  if (k === "preset") applyPreset(v);
+  syncControls(k, src); updateVisibility(); layoutPaper(); updateDims();
+  scheduleRender();
+}
+function setCtl(el, v){
+  if (el.classList.contains("seg")) el.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === String(v)));
+  else if (el.type === "checkbox") el.checked = !!v;
+  else if (el.type === "number" || el.type === "range") el.value = (v === null || v === undefined) ? "" : v;
+  else if (el.type === "color") { el.value = v || "#000000"; el.parentElement.style.setProperty("--c", v); }
+  else el.value = v ?? "";
+}
+/* 正在輸入的文字 / 數字框不覆寫（避免游標跳動）；分段按鈕、開關、選單一律同步反白狀態 */
+const isTyping = el => el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && !["checkbox", "color", "range"].includes(el.type));
+function syncControls(k, except){ $$(`[data-k="${k}"]`).forEach(el => { if (el === except && isTyping(el)) return; setCtl(el, S[k]); }); }
+function syncAll(){ Object.keys(DEFAULTS).forEach(k => syncControls(k)); updateVisibility(); }
+function evalCond(c){
+  return c.split("&").every(p => {
+    p = p.trim(); let neg = false; if (p[0] === "!") { neg = true; p = p.slice(1); }
+    const val = k => (k in S ? S[k] : UISTATE[k]);
+    const i = p.indexOf("="); let r;
+    if (i < 0) r = !!val(p); else r = p.slice(i + 1).split("|").includes(String(val(p.slice(0, i))));
+    return neg ? !r : r;
+  });
+}
+function updateVisibility(){ $$("[data-show]").forEach(el => { el.hidden = !evalCond(el.dataset.show); }); }
+function applyPreset(name){ const p = PRESETS[name]; if (!p) return; for (const [k, v] of Object.entries(p)) if (k !== "label" && k in DEFAULTS) { S[k] = v; syncControls(k); } }
+
+/* ───────────────────── 自訂區塊 ───────────────────── */
+function buildCustoms(){
+  $("#dropzone").innerHTML = `<div class="drop" data-pick><div class="dz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><div><b>加入檔案</b><small>拖放或點擊 · .xye .xyn .txt .xy .dat .csv · 可多選</small></div></div>`;
+  $("#peaktools").innerHTML = `<div class="row"><div class="lbl">自動找峰</div><div class="ctl"><select id="peakCurve" style="max-width:128px"></select><input class="num sm" id="peakN" type="number" value="8" min="1" max="40" title="峰數"><button class="btn sm" id="peakFind">找峰</button></div></div>`;
+  $("#peakFind").addEventListener("click", findPeaks);
+  $("#settings").innerHTML = `<div class="row" style="flex-wrap:wrap;gap:8px;justify-content:flex-start"><button class="btn sm" id="setSave">儲存設定檔</button><button class="btn sm" id="setLoad">載入設定檔</button><button class="btn sm danger" id="setReset">恢復期刊預設</button></div>`;
+  $("#setSave").onclick = () => download(new Blob([JSON.stringify({version:VERSION, settings:S}, null, 2)], {type:"application/json"}), "xrd_studio_settings.json");
+  $("#setLoad").onclick = () => $("#jsonInput").click();
+  $("#jsonInput").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+    try { const o = JSON.parse(await f.text()); S = Object.assign(clone(DEFAULTS), pick(o.settings || o)); syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); toast("已載入設定檔"); }
+    catch (err) { toast("設定檔格式錯誤", true); } };
+  $("#setReset").onclick = () => { if (!confirm("恢復所有繪圖設定為期刊預設？（不影響已載入的檔案）")) return; S = clone(DEFAULTS); syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); };
+}
+
+/* ───────────────────── 檔案清單 ───────────────────── */
+const TYPE_TXT = {sync_raw:"同步輻射 · 原始", sync_conv:"同步輻射 · 已轉換", inhouse:"In-house"};
+const fmtWl = v => (v == null ? "" : String(+(+v).toFixed(6)));
+function newItem(m){
+  let label = m.base;   // 同名（例如 .xye 與 .xyn）時加上副檔名，方便分辨
+  if (ITEMS.some(i => i.label === label)) label += ` (${m.ext.replace(".", "") || "data"})`;
+  return {id:m.id, label, color:null, visible:true, scale:1, shift:0, yoff:0, meta:m};
+}
+function subline(it){
+  const e = INFO.eff[it.id], t = TYPE_TXT[it.meta.type];
+  if (!e) return `<span class="fsub"><i></i>${t}</span>`;
+  return e.convert ? `<span class="fsub conv"><i></i>${t} · <b>${fmtWl(e.src)} → ${fmtWl(e.tgt)} Å</b></span>` : `<span class="fsub"><i></i>${t} · 無需轉換</span>`;
+}
+function renderFiles(){
+  const box = $("#files"); box.innerHTML = "";
+  UISTATE.needwl = ITEMS.some(i => i.meta.type === "sync_raw" && !i.meta.hdr_wl);
+  updateVisibility();
+  if (!ITEMS.length) { box.innerHTML = `<div class="muted">尚未載入檔案</div>`; refreshPeakCurves(); renderNotes(); showEmpty(true); return; }
+  ITEMS.forEach((it, i) => {
+    const c = it.color || INFO.colors[it.id] || "#8e8e93", m = it.meta, open = OPEN.has(it.id);
+    const el = h(`<div class="file${it.visible ? "" : " off"}" data-id="${it.id}">
+      <div class="file-row">
+        <label class="sw" style="--c:${c}" title="更改顏色"><input type="color" value="${c}" data-ik="color"></label>
+        <div class="finfo"><input class="flabel" value="${esc(it.label)}" data-ik="label" spellcheck="false" title="圖例 / 曲線名稱（可直接編輯）">${subline(it)}</div>
+        <button class="icon" data-act="vis" title="顯示 / 隱藏">${it.visible ? ICON.eye : ICON.eyeoff}</button>
+        <button class="icon${open ? " open" : ""}" data-act="more" title="詳細設定">${ICON.chev}</button>
+      </div>
+      <div class="file-more"${open ? "" : " hidden"}>
+        <div class="kv">
+          <span>強度倍率</span><input class="num" type="number" step="0.1" data-ik="scale">
+          <span>2θ 位移校正 (°)</span><input class="num" type="number" step="0.01" data-ik="shift">
+          <span>垂直微調（× 最大強度）</span><input class="num" type="number" step="0.05" data-ik="yoff">
+        </div>
+        <div class="fmeta">#${i + 1} · ${esc(m.name)} · ${m.n} 點 · 原始 2θ ${m.xr[0].toFixed(2)}–${m.xr[1].toFixed(2)}°<br>${esc(m.reason)}</div>
+        <div class="fact"><button class="btn sm" data-act="up">上移</button><button class="btn sm" data-act="down">下移</button><button class="btn sm" data-act="csv">匯出此 CSV</button><button class="btn sm" data-act="autocolor">自動配色</button><button class="btn sm danger" data-act="del">移除</button></div>
+      </div></div>`);
+    el.querySelector('[data-ik="scale"]').value = it.scale ?? 1;
+    el.querySelector('[data-ik="shift"]').value = it.shift ?? 0;
+    el.querySelector('[data-ik="yoff"]').value = it.yoff ?? 0;
+    box.appendChild(el);
+  });
+  box.appendChild(h(`<div class="listbar"><button class="btn ghost sm" data-act="allon">全部顯示</button><button class="btn ghost sm" data-act="alloff">全部隱藏</button><button class="btn ghost sm danger" data-act="clear">清除全部</button></div>`));
+  applyInfo(); refreshPeakCurves(); renderNotes(); showEmpty(false);
+}
+function bindFiles(){
+  const box = $("#files");
+  box.addEventListener("input", e => {
+    const el = e.target.closest("[data-ik]"); if (!el) return; const it = itemOf(el); if (!it) return; const k = el.dataset.ik;
+    if (k === "label" || k === "color") it[k] = el.value;
+    else it[k] = el.value === "" ? (k === "scale" ? 1 : 0) : parseFloat(el.value);
+    if (k === "color") el.parentElement.style.setProperty("--c", el.value);
+    if (k === "label") refreshPeakCurves();
+    scheduleRender();
+  });
+  box.addEventListener("click", async e => {
+    const b = e.target.closest("[data-act]"); if (!b) return; const act = b.dataset.act;
+    if (act === "allon" || act === "alloff") { ITEMS.forEach(i => i.visible = act === "allon"); renderFiles(); scheduleRender(0); return; }
+    if (act === "clear") { if (!confirm("移除所有檔案？")) return; const ids = ITEMS.map(i => i.id); ITEMS = []; NOTES = []; renderFiles(); call("remove", {ids}).catch(() => {}); return; }
+    const it = itemOf(b); if (!it) return; const i = ITEMS.indexOf(it);
+    if (act === "vis") { it.visible = !it.visible; renderFiles(); scheduleRender(0); }
+    else if (act === "more") { OPEN.has(it.id) ? OPEN.delete(it.id) : OPEN.add(it.id); renderFiles(); }
+    else if (act === "up" && i > 0) { [ITEMS[i - 1], ITEMS[i]] = [ITEMS[i], ITEMS[i - 1]]; renderFiles(); scheduleRender(0); }
+    else if (act === "down" && i < ITEMS.length - 1) { [ITEMS[i + 1], ITEMS[i]] = [ITEMS[i], ITEMS[i + 1]]; renderFiles(); scheduleRender(0); }
+    else if (act === "autocolor") { it.color = null; scheduleRender(0); }
+    else if (act === "csv") exportFile("export_csv", {only:it.id});
+    else if (act === "del") { ITEMS.splice(i, 1); NOTES = NOTES.filter(n => !(n.ids || []).includes(it.id)); renderFiles(); scheduleRender(0); call("remove", {ids:[it.id]}).catch(() => {}); }
+  });
+}
+const itemOf = el => { const f = el.closest(".file"); return f && ITEMS.find(i => i.id === f.dataset.id); };
+function applyInfo(){
+  $$("#files .file").forEach(el => {
+    const it = ITEMS.find(i => i.id === el.dataset.id); if (!it) return;
+    const c = it.color || INFO.colors[it.id]; if (c) { el.querySelector(".sw").style.setProperty("--c", c); el.querySelector(".sw input").value = c; }
+    const sub = el.querySelector(".fsub"); if (sub) sub.outerHTML = subline(it);
+  });
+  if (INFO.auto) { const [a, b] = INFO.auto; const p = (k, v) => $$(`input.num[data-k="${k}"]`).forEach(el => el.placeholder = (+v).toFixed(2)); p("xmin", a); p("xmax", b); }
+}
+function refreshPeakCurves(){
+  const s = $("#peakCurve"); if (!s) return; const cur = s.value;
+  s.innerHTML = ITEMS.map((it, i) => `<option value="${it.id}">${i + 1}. ${esc(it.label || it.meta.name)}</option>`).join("") || `<option value="">（無檔案）</option>`;
+  if (ITEMS.find(i => i.id === cur)) s.value = cur;
+}
+function renderNotes(){
+  NOTES = NOTES.filter(n => !n.ids || !n.ids.length || n.ids.every(id => ITEMS.find(i => i.id === id)));
+  $("#notesWrap").hidden = !NOTES.length;
+  $("#notes").innerHTML = NOTES.map((n, i) => `<div class="note-item ${n.level}"><span class="dot"></span><div>${esc(n.text)}</div><button class="x" data-ni="${i}" title="關閉">×</button></div>`).join("");
+}
+
+/* ───────────────────── 參考圖譜 ───────────────────── */
+function renderRefs(){
+  const box = $("#refs"); if (!Array.isArray(S.refs)) S.refs = [];
+  box.innerHTML = S.refs.map((r, i) => `<div class="ref" data-ri="${i}">
+    <div class="ref-head"><label class="sw" style="--c:${r.color || "#000"}"><input type="color" data-rk="color" value="${r.color || "#000000"}"></label><input class="text" data-rk="name" value="${esc(r.name || "")}" placeholder="名稱，例如 Si (PDF #27-1402)"><button class="icon" data-ract="del" title="移除">${ICON.trash}</button></div>
+    <div class="ref-opts"><div class="seg" data-rk="kind"><button type="button" data-v="2theta" class="${(r.kind || "2theta") === "2theta" ? "on" : ""}">2θ</button><button type="button" data-v="d" class="${r.kind === "d" ? "on" : ""}">d (Å)</button></div>
+      <span ${r.kind === "d" ? "hidden" : ""}>λ <input class="num sm" style="width:84px" type="number" step="0.00001" data-rk="wl" value="${r.wl ?? ""}" placeholder="Cu Kα₁"></span>
+      <label style="display:flex;align-items:center;gap:6px">hkl <input type="checkbox" class="switch" data-rk="show_hkl" ${r.show_hkl ? "checked" : ""}></label>
+      <button class="btn sm" data-ract="load">載入檔案</button></div>
+    <textarea data-rk="data" rows="4" spellcheck="false" placeholder="每行：位置  相對強度  hkl\n28.443  100  (111)\n47.303  55  (220)\n56.122  30  (311)">${esc(r.data || "")}</textarea></div>`).join("")
+    + `<div class="addrow"><button class="btn ghost sm" data-ract="add">＋ 新增參考圖譜</button></div>`;
+}
+function bindRefs(){
+  const box = $("#refs"); let loadIdx = -1;
+  box.addEventListener("input", e => { const el = e.target.closest("[data-rk]"); if (!el || el.classList.contains("seg")) return; const r = S.refs[+el.closest(".ref").dataset.ri]; const k = el.dataset.rk;
+    r[k] = el.type === "checkbox" ? el.checked : (el.type === "number" ? (el.value === "" ? null : parseFloat(el.value)) : el.value);
+    if (k === "color") el.parentElement.style.setProperty("--c", el.value); scheduleRender(); });
+  box.addEventListener("click", e => {
+    const sb = e.target.closest(".seg[data-rk] button"); if (sb) { S.refs[+sb.closest(".ref").dataset.ri].kind = sb.dataset.v; renderRefs(); scheduleRender(); return; }
+    const b = e.target.closest("[data-ract]"); if (!b) return; const a = b.dataset.ract;
+    if (a === "add") { const pal = ["#000000", "#D55E00", "#0072B2", "#009E73"]; S.refs.push({name:"", color:pal[S.refs.length % pal.length], kind:"2theta", wl:null, show_hkl:true, data:""}); renderRefs(); return; }
+    const i = +b.closest(".ref").dataset.ri;
+    if (a === "del") { S.refs.splice(i, 1); renderRefs(); scheduleRender(); }
+    if (a === "load") { loadIdx = i; $("#refInput").click(); }
+  });
+  $("#refInput").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f || loadIdx < 0) return;
+    const lines = (await f.text()).split(/\r?\n/).filter(l => /^\s*[-+]?\d*\.?\d+/.test(l));
+    S.refs[loadIdx].data = lines.join("\n"); if (!S.refs[loadIdx].name) S.refs[loadIdx].name = f.name.replace(/\.[^.]+$/, ""); renderRefs(); scheduleRender(); };
+}
+
+/* ───────────────────── 繪圖引擎（背景執行緒中的 Python） ───────────────────── */
+let worker = null, seqNo = 0, ENGINE = "loading";
+const waiting = new Map();
+function setEngine(state, text){
+  ENGINE = state; const el = $("#engine");
+  el.className = "engine " + state;
+  el.textContent = state === "ready" ? "繪圖引擎已就緒" : state === "error" ? "繪圖引擎無法啟動：" + text : (text || "正在載入繪圖引擎…") + "（第一次約需 10–30 秒，之後會快取）";
+}
+function startEngine(){
+  if (location.protocol === "file:") { setEngine("error", "請透過網址開啟本頁（例如 GitHub Pages，或在資料夾內執行 run_local.py），不能直接雙擊 index.html。"); return; }
+  try { worker = new Worker("worker.js?v=" + VERSION, {type:"module"}); }
+  catch (e) { setEngine("error", e.message); return; }
+  worker.onmessage = e => {
+    const m = e.data;
+    if (m.type === "progress") setEngine("loading", m.text);
+    else if (m.type === "ready") { setEngine("ready"); if (ITEMS.length) scheduleRender(0); }
+    else if (m.type === "fatal") setEngine("error", m.error + "。請確認網路連線後重新整理頁面。");
+    else if (m.type === "result") { const w = waiting.get(m.id); if (!w) return; waiting.delete(m.id); (m.meta && m.meta.error) ? w.reject(new Error(m.meta.error)) : w.resolve(m); }
+  };
+  worker.onerror = e => setEngine("error", e.message || "背景執行緒發生錯誤");
+}
+function call(cmd, args){
+  if (!worker) return Promise.reject(new Error("繪圖引擎沒有啟動"));
+  return new Promise((resolve, reject) => { const id = ++seqNo; waiting.set(id, {resolve, reject}); worker.postMessage({id, cmd, args}); });
+}
+const payload = (extra = {}) => ({S, items: ITEMS.map(({meta, ...r}) => r), ...extra});
+function download(blob, name){ const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
+let tt = null;
+function toast(msg, err = false){ const t = $("#toast"); t.textContent = msg; t.className = "toast show" + (err ? " err" : ""); clearTimeout(tt); tt = setTimeout(() => t.className = "toast" + (err ? " err" : ""), err ? 5200 : 3200); }
+
+async function addFiles(list){
+  const files = await Promise.all(Array.from(list).map(async f => ({name:f.name, text:await f.text()})));
+  if (!files.length) return;
+  if (ENGINE === "loading") toast("繪圖引擎載入中，完成後會自動處理檔案");
+  setBusy(true);
+  try {
+    const r = (await call("upload", {files, src_wl:S.src_wl, trim:S.csv_trim})).meta;
+    r.datasets.forEach(m => ITEMS.push(newItem(m)));
+    NOTES = NOTES.concat(r.notes || []);
+    renderFiles(); scheduleRender(0);
+    if (r.datasets.length) toast(`已載入 ${r.datasets.length} 個檔案`);
+    if (r.notes && r.notes.some(n => n.level === "warn")) selectTab("data");
+  } catch (e) { toast("載入失敗：" + e.message, true); } finally { setBusy(false); }
+}
+
+/* ───────────────────── 即時預覽 ───────────────────── */
+let timer = null, inflight = false, pending = false, lastUrl = null;
+function scheduleRender(delay = 120){ clearTimeout(timer); timer = setTimeout(doRender, delay); }
+async function doRender(){
+  if (!ITEMS.length) { showEmpty(true); return; }
+  if (ENGINE !== "ready") return;           // 引擎就緒後會自動重畫
+  if (inflight) { pending = true; return; }
+  inflight = true; pending = false; setBusy(true);
+  const w = $("#paper").getBoundingClientRect().width || 700;
+  const px = Math.round(Math.min(2400, Math.max(300, w * (window.devicePixelRatio || 1))));
+  try {
+    const r = await call("render", payload({px}));
+    const url = URL.createObjectURL(new Blob([r.bytes], {type:"image/png"}));
+    $("#preview").src = url; if (lastUrl) URL.revokeObjectURL(lastUrl); lastUrl = url;
+    INFO = {colors:r.meta.colors || {}, eff:r.meta.eff || {}, auto:r.meta.auto};
+    WARN = r.meta.warnings || []; showWarnings(false); applyInfo(); showEmpty(false);
+  } catch (e) { WARN = [e.message]; showWarnings(true); }
+  finally { inflight = false; setBusy(false); if (pending) doRender(); }
+}
+function showWarnings(isErr){ const w = $("#warns"); w.textContent = WARN.length ? "⚠︎ " + WARN.join("　") : ""; w.title = WARN.join("\n"); w.style.color = isErr ? "var(--red)" : ""; }
+let busyT = null;
+function setBusy(on){ clearTimeout(busyT); if (on) busyT = setTimeout(() => $("#busy").hidden = false, 200); else $("#busy").hidden = true; }
+function showEmpty(on){ $("#empty").hidden = !on; $("#paper").hidden = on; if (!on) layoutPaper(); else $("#warns").textContent = ""; }
+function layoutPaper(){
+  const p = $("#paper"), cv = $("#canvas"); if (p.hidden) return;
+  const ar = (S.width_mm || 89) / (S.height_mm || 75); let w;
+  if (ZOOM === "fit") { const aw = cv.clientWidth - 56, ah = cv.clientHeight - 56; w = Math.max(160, Math.min(aw, ah * ar)); }
+  else w = (S.width_mm / 25.4) * 96 * parseFloat(ZOOM);
+  p.style.width = w + "px"; p.style.height = (w / ar) + "px";
+}
+function updateDims(){
+  const W = S.width_mm, H = S.height_mm; let s = `${(+W).toFixed(1)} × ${(+H).toFixed(1)} mm · ${String(S.fmt).toUpperCase()}`;
+  if (S.fmt === "png" || S.fmt === "tiff") s += ` ${S.dpi} dpi → ${Math.round(W / 25.4 * S.dpi)} × ${Math.round(H / 25.4 * S.dpi)} px`; else s += " · 向量";
+  $("#dims").textContent = s;
+}
+
+/* ───────────────────── 匯出 ───────────────────── */
+async function exportFile(cmd, extra = {}){
+  if (!ITEMS.length) return toast("請先載入檔案", true);
+  setBusy(true);
+  try { const r = await call(cmd, payload(extra)); download(new Blob([r.bytes], {type:r.meta.mime}), r.meta.name); toast(`已匯出 ${r.meta.name}`); }
+  catch (e) { toast("匯出失敗：" + e.message, true); } finally { setBusy(false); }
+}
+async function findPeaks(){
+  const id = $("#peakCurve").value; if (!id) return toast("請先載入檔案", true);
+  try { const r = (await call("peaks", payload({id, n: parseInt($("#peakN").value) || 8}))).meta;
+    if (!r.peaks.length) return toast("沒有找到明顯的峰");
+    const add = r.peaks.map(x => `${x.toFixed(2)}, [v], ${r.idx}`).join("\n");
+    S.peaks = (S.peaks && S.peaks.trim() ? S.peaks.replace(/\s+$/, "") + "\n" : "") + add; syncControls("peaks"); scheduleRender(0);
+    toast(`找到 ${r.peaks.length} 個峰，已加入標註清單`);
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ───────────────────── 事件 ───────────────────── */
+function selectTab(t){ $$("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); $$(".pane").forEach(p => p.hidden = p.dataset.pane !== t); }
+function bindUI(){
+  $("#tabs").addEventListener("click", e => { const b = e.target.closest("button[data-tab]"); if (b) { selectTab(b.dataset.tab); $("#side").scrollTop = 0; } });
+  document.addEventListener("click", e => { if (e.target.closest("[data-pick]")) $("#fileInput").click(); const x = e.target.closest(".note-item .x"); if (x) { NOTES.splice(+x.dataset.ni, 1); renderNotes(); } });
+  $("#fileInput").addEventListener("change", e => { addFiles(e.target.files); e.target.value = ""; });
+  let depth = 0;
+  window.addEventListener("dragenter", e => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) { depth++; document.body.classList.add("dragging"); } });
+  window.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) document.body.classList.remove("dragging"); });
+  window.addEventListener("dragover", e => e.preventDefault());
+  window.addEventListener("drop", e => { e.preventDefault(); depth = 0; document.body.classList.remove("dragging"); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+  $("#btnFig").onclick = () => exportFile("export_figure");
+  $("#btnCsv").onclick = () => exportFile("export_csv");
+  $("#btnZip").onclick = () => exportFile("export_all");
+  $("#zoomSeg").addEventListener("click", e => { const b = e.target.closest("button[data-z]"); if (!b) return; ZOOM = b.dataset.z; $$("#zoomSeg button").forEach(x => x.classList.toggle("on", x === b)); layoutPaper(); scheduleRender(0); });
+  window.addEventListener("keydown", e => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") { e.preventDefault(); exportFile("export_figure"); } });
+  let rt = null; window.addEventListener("resize", () => { layoutPaper(); clearTimeout(rt); rt = setTimeout(() => scheduleRender(0), 300); });
+}
+
+buildPanes(); buildCustoms(); renderRefs(); bindAll(); bindFiles(); bindRefs(); bindUI();
+syncAll(); updateDims(); renderFiles();
+startEngine();
+</script>
+</body>
+</html>

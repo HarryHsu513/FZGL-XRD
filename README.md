@@ -1,0 +1,63 @@
+# XRD Studio
+
+同步輻射（.xye / .xyn）與 In-house（.txt / .xy / .dat / .csv）XRD 數據的波長轉換與期刊級繪圖工具。
+打開網頁就能用：自動判斷格式、把 2θ 換算到 In-house 波長（Cu Kα₁ 1.540598 Å）、即時預覽、匯出 PNG / TIFF / PDF / SVG / EPS 與 CSV。
+
+所有運算都在使用者自己的瀏覽器裡用 Python（Pyodide + numpy + matplotlib）執行，**檔案不會上傳到任何伺服器**。
+
+## 資料夾內容
+
+| 檔案 | 用途 |
+|---|---|
+| `index.html` | 網頁介面 |
+| `worker.js` | 在瀏覽器背景載入 Python 執行環境 |
+| `xrd_core.py` | 讀檔、格式判斷、波長換算（保留原 `convert_two_theta()`）、繪圖與匯出 |
+| `fonts/` | Liberation Sans / Serif 字型（與 Arial / Times New Roman 字寬完全相同，SIL OFL 授權，可自由散布） |
+| `run_local.py` | 上傳前在自己電腦預覽用 |
+
+## 免費架設到網路上（GitHub Pages）
+
+GitHub Pages 是 GitHub 提供的免費靜態網站空間：不會休眠、不需維護主機，公開儲存庫（public repository）可免費使用。
+本工具只有約 4 MB，遠低於 1 GB 的網站容量上限；每月 100 GB 流量也遠超過一般實驗室的使用量。
+
+1. 到 <https://github.com> 註冊並登入。
+2. 右上角 **＋ → New repository**。
+   - Repository name 填 `xrd-studio`（這會成為網址的一部分）
+   - 選 **Public**
+   - 按 **Create repository**
+3. 在新儲存庫的頁面點 **uploading an existing file**（或 **Add file → Upload files**）。
+4. 把本資料夾**裡面的**所有檔案與 `fonts` 資料夾一起拖進上傳區，按 **Commit changes**。
+   - ⚠️ `index.html` 必須在儲存庫的最上層，不要把外層資料夾整個拖進去。
+5. 到 **Settings → Pages**（左側選單「Code, planning, and automation」區）。
+6. 在 **Build and deployment → Source** 選 **Deploy from a branch**；Branch 選 **main**、資料夾選 **/ (root)**，按 **Save**。
+7. 等 1–2 分鐘後重新整理該頁，上方會出現網址：
+   `https://你的帳號.github.io/xrd-studio/`
+   把這個網址分享給別人，對方用瀏覽器打開就能直接使用。
+
+### 之後要更新程式
+
+到儲存庫頁面 **Add file → Upload files**，拖入修改過的檔案（同名會直接覆蓋）→ **Commit changes**，約 1 分鐘後網站就會更新。
+使用者那端若仍看到舊版，重新整理頁面即可（瀏覽器最多快取約 10 分鐘）。
+
+## 在自己電腦預覽
+
+```bash
+python run_local.py
+```
+會自動開啟 `http://127.0.0.1:8000/`。不能直接雙擊 `index.html`（瀏覽器安全限制不允許從本機檔案啟動背景執行緒）。
+
+## 不開介面的批次轉換
+
+輸出與原 `Synchrotron_Convert.py` 完全相同的 CSV（在原檔旁產生）：
+
+```bash
+python xrd_core.py 檔案1.xye 檔案2.xye
+```
+
+## 使用須知
+
+- 第一次開啟需下載 Python 執行環境（約 20–30 MB，10–30 秒），之後由瀏覽器快取，再次開啟只需數秒。需要網路連線。
+- 請使用最新版 Chrome、Edge、Safari 或 Firefox。
+- 網頁版以 Liberation Sans 呈現 Arial、以 Liberation Serif 呈現 Times New Roman，兩者字寬與原字型完全相同，版面一致；SVG 匯出時會指定優先使用 Arial / Times New Roman。
+- Nature 的正式稿主圖要求向量格式（PDF / EPS / AI / SVG），不接受 PNG / TIFF；投稿前請以各期刊最新作者須知為準。
+- Python 執行環境由 jsDelivr CDN 提供（Pyodide 314.0.7，版本已固定），網站本身不需要任何後端主機。
