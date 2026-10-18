@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>XRD Studio</title>
-<meta name="description" content="同步輻射 / In-house XRD 波長轉換與期刊級繪圖工具，所有運算在瀏覽器中進行。">
+<title>FZGL XRD Studio</title>
+<meta name="description" content="同步輻射 / In-house XRD 波長轉換與繪圖工具，所有運算在瀏覽器中進行。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6.5' fill='%231d1d1f'/%3E%3Cpath d='M3.5 17.5h3.2l1.4-9.5 1.5 9.5h2l1.1-5.2 1.1 5.2h1.7l1-3.3 1 3.3h2.9' fill='none' stroke='white' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 :root{
@@ -177,6 +177,7 @@ body.dragging .dragmask{display:block}
 .chip small{color:var(--text3)}
 .chip .x{border:0;background:var(--fill);color:var(--text2);width:20px;height:20px;border-radius:50%;cursor:pointer;line-height:1;font-size:13px}
 .mk{font-size:11px}
+.chip .cdot{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none}
 #idCandWrap,#idConfWrap,#idAutoWrap{scroll-margin-top:70px}
 .more{display:block;width:100%;text-align:center;padding:9px;border:0;background:none;color:var(--accent);font:500 12.5px var(--font);cursor:pointer}
 .asset-warn{margin:4px 16px 14px;padding:10px 12px;border-radius:10px;background:rgba(255,59,48,.1);color:var(--red);font-size:12.5px;line-height:1.5}
@@ -189,7 +190,7 @@ body.dragging .dragmask{display:block}
 <header class="top">
   <div class="brand">
     <svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6.5" fill="currentColor" style="color:var(--text)"/><path d="M3.5 17.5h3.2l1.4-9.5 1.5 9.5h2l1.1-5.2 1.1 5.2h1.7l1-3.3 1 3.3h2.9" fill="none" stroke="var(--bg-side)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
-    <b>XRD Studio</b><span class="sub">同步輻射 → In-house 波長轉換 · 期刊級繪圖</span>
+    <b>FZGL XRD Studio</b><span class="sub">同步輻射 → In-house 波長轉換 · 繪圖</span>
   </div>
   <div class="actions">
     <button class="btn" id="btnCsv" title="匯出所有檔案換算後的 CSV">匯出 CSV</button>
@@ -200,7 +201,7 @@ body.dragging .dragmask{display:block}
 <div class="app">
   <aside class="side" id="side">
     <div class="tabs"><div class="seg wide" id="tabs">
-      <button type="button" data-tab="data" class="on">數據</button><button type="button" data-tab="style">樣式</button><button type="button" data-tab="axes">座標軸</button><button type="button" data-tab="text">文字</button><button type="button" data-tab="annot">標註</button><button type="button" data-tab="id">鑑定</button><button type="button" data-tab="out">輸出</button>
+      <button type="button" data-tab="data" class="on">數據</button><button type="button" data-tab="style">樣式</button><button type="button" data-tab="axes">座標軸</button><button type="button" data-tab="text">文字</button><button type="button" data-tab="annot">標註</button><button type="button" data-tab="id">鑑定（Beta）</button><button type="button" data-tab="out">輸出</button>
     </div></div>
     <div class="asset-warn" id="assetWarn" hidden></div>
     <section class="pane" data-pane="data"></section>
@@ -237,7 +238,7 @@ body.dragging .dragmask{display:block}
 <input type="file" id="refInput" hidden>
 <script>
 "use strict";
-const VERSION = "2.3";
+const VERSION = "2.4";
 /* 預設值 = Nature 單欄樣式（與 xrd_core.py 的 DEFAULTS 相同） */
 const DEFAULTS = {
   src_wl:0.77491,
@@ -284,6 +285,7 @@ function pick(o){ const r = {}; for (const k in (o || {})) if (k in DEFAULTS) r[
 
 let S = clone(DEFAULTS);              // 每次開啟都從期刊樣式開始
 let ITEMS = [], INFO = {colors:{}, eff:{}}, NOTES = [], OPEN = new Set(), ZOOM = "fit", WARN = [];
+let IDMARK = null;                    // 「鑑定」自動寫入標註的峰位符號（記錄來源曲線與寫入的行，方便之後移除）
 const UISTATE = {needwl:false};       // 介面條件（不送給 Python）
 
 const ICON = {
@@ -451,6 +453,7 @@ const UI = {
   ],
   id: [
     {title:"樣品", rows:[cus("idSample")]},
+    {title:"圖上的礦物", id:"idPlotWrap", rows:[cus("idPlot")]},
     {title:"自動全譜辨識", rows:[cus("idAutoBox")]},
     {title:"辨識結果", id:"idAutoWrap", rows:[cus("idAuto")]},
     {title:"逐峰反查 · 1 最強峰", rows:[cus("idPeakBox")], foot:"混合物中最強的幾根峰常來自不同礦物，先只勾 1 根最穩定。"},
@@ -578,9 +581,11 @@ function buildCustoms(){
   $("#setSave").onclick = () => download(new Blob([JSON.stringify({version:VERSION, settings:S}, null, 2)], {type:"application/json"}), "xrd_studio_settings.json");
   $("#setLoad").onclick = () => $("#jsonInput").click();
   $("#jsonInput").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f) return;
-    try { const o = JSON.parse(await f.text()); S = Object.assign(clone(DEFAULTS), pick(o.settings || o)); syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); toast("已載入設定檔"); }
+    try { const o = JSON.parse(await f.text()); S = Object.assign(clone(DEFAULTS), pick(o.settings || o)); IDMARK = null;
+      (S.refs || []).forEach(r => delete r.curve);   // 設定檔裡的標準卡片不屬於目前的任何檔案
+      syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); toast("已載入設定檔"); }
     catch (err) { toast("設定檔格式錯誤", true); } };
-  $("#setReset").onclick = () => { if (!confirm("恢復所有繪圖設定為期刊預設？（不影響已載入的檔案）")) return; S = clone(DEFAULTS); syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); };
+  $("#setReset").onclick = () => { if (!confirm("恢復所有繪圖設定為期刊預設？（不影響已載入的檔案）")) return; S = clone(DEFAULTS); IDMARK = null; syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); };
 }
 
 /* ───────────────────── 檔案清單 ───────────────────── */
@@ -597,6 +602,7 @@ function subline(it){
   return e.convert ? `<span class="fsub conv"><i></i>${t} · <b>${fmtWl(e.src)} → ${fmtWl(e.tgt)} Å</b></span>` : `<span class="fsub"><i></i>${t} · 無需轉換</span>`;
 }
 function renderFiles(){
+  pruneIdPlot();
   const box = $("#files"); box.innerHTML = "";
   UISTATE.needwl = ITEMS.some(i => i.meta.type === "sync_raw" && !i.meta.hdr_wl);
   updateVisibility();
@@ -640,7 +646,7 @@ function bindFiles(){
   box.addEventListener("click", async e => {
     const b = e.target.closest("[data-act]"); if (!b) return; const act = b.dataset.act;
     if (act === "allon" || act === "alloff") { ITEMS.forEach(i => i.visible = act === "allon"); renderFiles(); scheduleRender(0); return; }
-    if (act === "clear") { if (!confirm("移除所有檔案？")) return; const ids = ITEMS.map(i => i.id); ITEMS = []; NOTES = []; renderFiles(); call("remove", {ids}).catch(() => {}); return; }
+    if (act === "clear") { if (!confirm("移除所有檔案？（從「鑑定」加到圖上的礦物也會一併移除）")) return; const ids = ITEMS.map(i => i.id); ITEMS = []; NOTES = []; renderFiles(); call("remove", {ids}).catch(() => {}); return; }
     const it = itemOf(b); if (!it) return; const i = ITEMS.indexOf(it);
     if (act === "vis") { it.visible = !it.visible; renderFiles(); scheduleRender(0); }
     else if (act === "more") { OPEN.has(it.id) ? OPEN.delete(it.id) : OPEN.add(it.id); renderFiles(); }
@@ -681,7 +687,8 @@ function renderRefs(){
       <label style="display:flex;align-items:center;gap:6px">hkl <input type="checkbox" class="switch" data-rk="show_hkl" ${r.show_hkl ? "checked" : ""}></label>
       <button class="btn sm" data-ract="load">載入檔案</button></div>
     <textarea data-rk="data" rows="4" spellcheck="false" placeholder="每行：位置  相對強度  hkl\n28.443  100  (111)\n47.303  55  (220)\n56.122  30  (311)">${esc(r.data || "")}</textarea></div>`).join("")
-    + `<div class="addrow"><button class="btn ghost sm" data-ract="add">＋ 新增參考圖譜</button></div>`;
+    + `<div class="addrow"><button class="btn ghost sm" data-ract="add">＋ 新增參考圖譜</button>${S.refs.length ? `<button class="btn ghost sm danger" data-ract="clear">清除全部</button>` : ""}</div>`;
+  renderOnPlot();
 }
 function bindRefs(){
   const box = $("#refs"); let loadIdx = -1;
@@ -692,6 +699,7 @@ function bindRefs(){
     const sb = e.target.closest(".seg[data-rk] button"); if (sb) { S.refs[+sb.closest(".ref").dataset.ri].kind = sb.dataset.v; renderRefs(); scheduleRender(); return; }
     const b = e.target.closest("[data-ract]"); if (!b) return; const a = b.dataset.ract;
     if (a === "add") { const pal = ["#000000", "#D55E00", "#0072B2", "#009E73"]; S.refs.push({name:"", color:pal[S.refs.length % pal.length], kind:"2theta", wl:null, show_hkl:true, data:""}); renderRefs(); return; }
+    if (a === "clear") { if (!confirm("移除所有標準卡片？")) return; S.refs = []; renderRefs(); renderCands(); renderAuto(); scheduleRender(0); return; }
     const i = +b.closest(".ref").dataset.ri;
     if (a === "del") { S.refs.splice(i, 1); renderRefs(); scheduleRender(); }
     if (a === "load") { loadIdx = i; $("#refInput").click(); }
@@ -837,7 +845,15 @@ function buildIdUI(){
     <div class="row" id="idStatusRow" hidden><div class="cand-sub" id="idStatus" style="white-space:normal"></div></div>`;
   $("#idManual").innerHTML = `
     <div class="row"><div class="lbl">礦物名稱</div><div class="ctl"><input class="text" id="idName" list="idNameList" style="width:150px" placeholder="例如 Gypsum" spellcheck="false" autocomplete="off"><datalist id="idNameList"></datalist><button class="btn sm" id="idVerify">驗證</button></div></div>`;
-  $("#idCandWrap").hidden = true; $("#idConfWrap").hidden = true; $("#idAutoWrap").hidden = true;
+  $("#idCandWrap").hidden = true; $("#idConfWrap").hidden = true; $("#idAutoWrap").hidden = true; $("#idPlotWrap").hidden = true;
+  $("#idPlot").addEventListener("click", e => {
+    const x = e.target.closest("[data-unplot]");
+    if (x) S.refs.splice(+x.dataset.unplot, 1);
+    else if (e.target.closest("[data-unmark]")) unmarkId();
+    else if (e.target.closest("[data-unplotall]")) { S.refs = S.refs.filter(r => !r.key); unmarkId(); }
+    else return;
+    renderRefs(); renderCands(); renderAuto(); scheduleRender(0);
+  });
   $("#idSens").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; $$("#idSens button").forEach(x => x.classList.toggle("on", x === b)); });
   $("#idAutoRun").addEventListener("click", idAutoRun);
   $("#idAuto").addEventListener("click", idCandClick);
@@ -871,7 +887,7 @@ function refreshIdCurves(){
   s.innerHTML = ITEMS.map((it, i) => `<option value="${it.id}">${i + 1}. ${esc(it.label || it.meta.name)}</option>`).join("") || `<option value="">（無檔案）</option>`;
   s.value = IDS.curve;
 }
-function onIdTab(){ refreshIdCurves(); if (IDS.curve && !IDS.peaks.length) idDetect(); loadNames(); }
+function onIdTab(){ refreshIdCurves(); renderOnPlot(); if (IDS.curve && !IDS.peaks.length) idDetect(); loadNames(); }
 const idPct = () => parseFloat($("#idPct").value) || 1.5;
 const idArgs = (extra = {}) => payload({id:IDS.curve, tol:ID_TOL, confirmed:IDS.confirmed.map(c => ({key:c.key, shift:c.shift, eps:c.eps || 0})), ...extra});
 function selDs(){ return IDS.sel.map(i => IDS.peaks.find(p => p.i === i)).filter(Boolean).sort((a, b) => b.I - a.I).map(p => p.d); }
@@ -996,20 +1012,67 @@ async function addRef(key){
   if (onPlot(key)) return;
   const r = (await call("id_ref", {key})).meta;
   const used = new Set(S.refs.map(x => x.color));
-  S.refs.push({name:`${r.name} (${r.src} ${r.rid})`, color:REF_COLORS.find(x => !used.has(x)) || "#000000", kind:"d", wl:null, show_hkl:false, data:r.data, key});
+  S.refs.push({name:`${r.name} (${r.src} ${r.rid})`, color:REF_COLORS.find(x => !used.has(x)) || "#000000", kind:"d", wl:null, show_hkl:false, data:r.data, key, curve:IDS.curve});
+}
+/* 「確定」的礦物（沒有時取前 6 個）：一鍵加到圖上 / 從圖上移除 */
+function autoPlotSet(){ const pick = IDS.auto.filter(c => c.tier === "certain"); return (pick.length ? pick : IDS.auto).slice(0, 6); }
+
+/* ── 從「鑑定」加到圖上的東西：標準卡片（S.refs 中有 key 的）與峰位符號（IDMARK） ──
+   都記錄來源曲線；來源曲線被移除（或清除全部檔案）時一併移除。 */
+function markLines(m){
+  const k = ITEMS.findIndex(i => i.id === m.curve) + 1;
+  return {peaks:m.peaks.map(([t, mk]) => `${t}, [${mk}], ${k}`), texts:m.texts.map(([y, mk, name]) => `0.03, ${y}, [${mk}] ${name}, ${m.col}`)};
+}
+const dropLines = (txt, lines) => { const own = new Set(lines); return (txt || "").split("\n").filter(l => !own.has(l.trim())).join("\n").trim(); };
+const joinLines = (txt, lines) => [(txt || "").trim(), ...lines].filter(Boolean).join("\n");
+const hasLines = (txt, lines) => { const have = new Set((txt || "").split("\n").map(l => l.trim())); return lines.some(l => have.has(l)); };
+function markOnPlot(){ return !!IDMARK && (hasLines(S.peaks, IDMARK.lines.peaks) || hasLines(S.texts, IDMARK.lines.texts)); }
+/* 只移除「鑑定」寫入的那幾行，使用者在「標註」頁自己輸入的保留 */
+function unmarkId(){
+  if (!IDMARK) return;
+  S.peaks = dropLines(S.peaks, IDMARK.lines.peaks); S.texts = dropLines(S.texts, IDMARK.lines.texts); IDMARK = null;
+  syncControls("peaks"); syncControls("texts");
+}
+function pruneIdPlot(){
+  const alive = id => ITEMS.some(i => i.id === id);
+  let changed = false;
+  const n = (S.refs || []).length;
+  S.refs = (S.refs || []).filter(r => !(r.key && r.curve && !alive(r.curve)));
+  if (S.refs.length !== n) { changed = true; renderRefs(); }
+  if (IDMARK) {
+    if (!alive(IDMARK.curve)) { unmarkId(); changed = true; }
+    else {   // 檔案順序改變時，更新峰位標註裡的曲線編號
+      const L = markLines(IDMARK), map = new Map(IDMARK.lines.peaks.map((l, j) => [l, L.peaks[j]]));
+      if (L.peaks.some((l, j) => l !== IDMARK.lines.peaks[j])) {
+        S.peaks = (S.peaks || "").split("\n").map(l => map.get(l.trim()) ?? l).join("\n"); IDMARK.lines = L; syncControls("peaks"); changed = true;
+      }
+    }
+  }
+  if (changed) scheduleRender(0);
+  renderOnPlot();
+}
+function renderOnPlot(){
+  const wrap = $("#idPlotWrap"), box = $("#idPlot"); if (!wrap || !box) return;
+  const refs = (S.refs || []).map((r, i) => [r, i]).filter(([r]) => r.key), mk = markOnPlot();
+  wrap.hidden = !refs.length && !mk;
+  if (wrap.hidden) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="chips">${refs.map(([r, i]) => `<span class="chip"><span class="cdot" style="--c:${r.color || "#000"}"></span>${esc(r.name)}<button class="x" data-unplot="${i}" title="從圖上移除">×</button></span>`).join("")}${
+    mk ? `<span class="chip"><span class="mk">▼●■</span>峰位符號標記 <small>${IDMARK.texts.length} 種礦物</small><button class="x" data-unmark title="從圖上移除">×</button></span>` : ""}</div>
+    <div class="row" style="justify-content:flex-start"><button class="btn sm danger" data-unplotall>全部從圖上移除</button></div>`;
 }
 async function idCandClick(e){
   const b = e.target.closest("[data-cact]"); if (!b) return;
   const auto = !!b.closest("#idAuto");
   if (b.dataset.cact === "more") { IDS.showMore = !IDS.showMore; renderCands(); return; }
   if (b.dataset.cact === "allplot") {
-    const pick = IDS.auto.filter(c => c.tier === "certain"); 
-    try { for (const c of (pick.length ? pick : IDS.auto).slice(0, 6)) await addRef(c.best.key); } catch (er) { return toast(er.message, true); }
+    const set = autoPlotSet(), keys = new Set(set.map(c => c.best.key));
+    if (set.every(c => onPlot(c.best.key))) S.refs = S.refs.filter(r => !keys.has(r.key));
+    else { try { for (const c of set) await addRef(c.best.key); } catch (er) { return toast(er.message, true); } }
     renderRefs(); renderAuto(); renderCands(); scheduleRender(0); return;
   }
   if (b.dataset.cact === "allconfirm") {
     IDS.confirmed = IDS.auto.filter(c => c.tier === "certain").map(c => ({key:c.best.key, name:c.name, shift:c.best.shift, eps:c.eps || 0, src:c.best.src, rid:c.best.rid}));
-    IDS.detail = {}; await idDetect(true); renderAuto(); renderCands(); idMark(true); return;
+    IDS.detail = {}; await idDetect(true); renderAuto(); renderCands(); idMark(); return;
   }
   const i = +b.closest(".cand").dataset.ci, c = (auto ? IDS.auto : IDS.cands)[i];
   if (b.dataset.cact === "toggle") return idOpen(i, auto);
@@ -1021,7 +1084,7 @@ async function idCandClick(e){
   } else if (b.dataset.cact === "confirm") {
     if (isConfirmed(ent.key)) IDS.confirmed = IDS.confirmed.filter(x => x.key !== ent.key);
     else { IDS.confirmed.push({key:ent.key, name:ent.name, shift:ent.shift, eps:(auto && c.best.key === ent.key ? c.eps : 0) || 0, src:ent.src, rid:ent.rid}); toast(`已確認 ${ent.name}，已選取剩下最強的峰，可直接再按「查詢」`); }
-    IDS.detail = {}; await idDetect(true); renderCands(); renderAuto();
+    IDS.detail = {}; await idDetect(true); renderCands(); renderAuto(); refreshMarks();
   }
 }
 function renderConf(){
@@ -1034,25 +1097,31 @@ function renderConf(){
 }
 async function idConfClick(e){
   const x = e.target.closest("[data-conf]");
-  if (x) { IDS.confirmed.splice(+x.dataset.conf, 1); IDS.detail = {}; await idDetect(true); renderCands(); return; }
+  if (x) { IDS.confirmed.splice(+x.dataset.conf, 1); IDS.detail = {}; await idDetect(true); renderCands(); renderAuto(); refreshMarks(); return; }
   const b = e.target.closest("[data-confact]"); if (!b) return;
   if (b.dataset.confact === "next") { await idDetect(true); return idQuery(); }
   if (b.dataset.confact === "mark") idMark(false);
 }
-function idMark(silent){
-  {
-    const k = ITEMS.findIndex(i => i.id === IDS.curve) + 1, col = INFO.colors[IDS.curve] || "#000000";
-    const peaks = [], texts = [];
-    IDS.confirmed.forEach((c, j) => {
-      const mk = MARKS[j % MARKS.length];
-      IDS.peaks.filter(p => p.by === c.name && p.I >= 1).sort((a, b) => b.I - a.I).slice(0, 8).sort((a, b) => a.t - b.t).forEach(p => peaks.push(`${p.t.toFixed(2)}, [${mk}], ${k}`));
-      texts.push(`0.03, ${(0.94 - 0.07 * j).toFixed(2)}, [${mk}] ${c.name}, ${col}`);
-    });
-    if (!silent && (S.peaks.trim() || S.texts.trim()) && !confirm("取代「標註」頁現有的峰位標註與自由文字？")) return;
-    S.peaks = peaks.join("\n"); S.texts = texts.join("\n"); syncControls("peaks"); syncControls("texts"); scheduleRender(0);
-    toast("已標到圖上，可在「標註」頁調整");
+/* 把已確認礦物的峰位符號標到圖上：先移除上次自動加的，再加入新的；使用者自己輸入的標註都保留 */
+function idMark(quiet){
+  const it = ITEMS.find(i => i.id === IDS.curve);
+  const m = {curve:IDS.curve, col:(it && it.color) || INFO.colors[IDS.curve] || "#000000", peaks:[], texts:[]};
+  IDS.confirmed.forEach((c, j) => {
+    const mk = MARKS[j % MARKS.length];
+    IDS.peaks.filter(p => p.by === c.name && p.I >= 1).sort((a, b) => b.I - a.I).slice(0, 8).sort((a, b) => a.t - b.t).forEach(p => m.peaks.push([p.t.toFixed(2), mk]));
+    m.texts.push([(0.94 - 0.07 * j).toFixed(2), mk, c.name]);
+  });
+  unmarkId();
+  if (it && m.texts.length) {
+    m.lines = markLines(m);
+    S.peaks = joinLines(S.peaks, m.lines.peaks); S.texts = joinLines(S.texts, m.lines.texts); IDMARK = m;
+    syncControls("peaks"); syncControls("texts");
+    if (!quiet) toast("已標到圖上，可在「標註」頁調整，或在上方「圖上的礦物」移除");
   }
+  renderOnPlot(); scheduleRender(0);
 }
+/* 已確認的礦物有變動時，若圖上已有符號標記就跟著更新 */
+function refreshMarks(){ if (markOnPlot()) idMark(true); }
 async function idAutoRun(){
   if (!IDS.curve) return toast("請先載入檔案", true);
   const sens = ($("#idSens button.on") || {}).dataset?.v || "high";
@@ -1084,7 +1153,8 @@ function renderAuto(){
     const grp = c.group ? `${esc(c.group.split(" ")[0])} · ` : "";
     return `<div class="cand" data-ci="${i}"><div class="cand-head" data-cact="toggle"><span class="tier t-${c.tier}">${c.tier === "certain" ? "確定" : "可能"}</span><div style="flex:1;min-width:0"><div class="cand-name">${esc(c.name)} ${tags}</div><div class="cand-sub" style="white-space:normal">${grp}${esc(c.formula)} · 強度佔比 ${(c.share * 100).toFixed(c.share < 0.1 ? 1 : 0)}%${alts}</div></div><span class="icon${open ? " open" : ""}">${ICON.chev}</span></div>${open ? detailHtml(c) : ""}</div>`;
   }).join("");
-  if (IDS.auto.length) html += `<div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="btn sm" data-cact="allplot">「確定」的標準卡片加到圖上</button><button class="btn sm primary" data-cact="allconfirm">確認「確定」的礦物並標到圖上</button></div>`;
+  const allOn = IDS.auto.length && autoPlotSet().every(c => onPlot(c.best.key));
+  if (IDS.auto.length) html += `<div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="btn sm" data-cact="allplot">${allOn ? "從圖上移除這些標準卡片" : (nC ? "「確定」的標準卡片加到圖上" : "標準卡片加到圖上")}</button><button class="btn sm primary" data-cact="allconfirm">確認「確定」的礦物並標到圖上</button></div>`;
   box.innerHTML = html;
 }
 async function loadNames(){

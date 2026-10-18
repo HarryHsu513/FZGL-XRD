@@ -46,7 +46,7 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.mathtext").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.backends.backend_ps").setLevel(logging.ERROR)  # EPS 不支援透明度的提示
 
-APP_VERSION = "2.3"
+APP_VERSION = "2.4"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. 波長設定與換算（原程式碼，邏輯未更動）
