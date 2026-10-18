@@ -46,7 +46,7 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.mathtext").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.backends.backend_ps").setLevel(logging.ERROR)  # EPS 不支援透明度的提示
 
-APP_VERSION = "2.2"
+APP_VERSION = "2.3"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. 波長設定與換算（原程式碼，邏輯未更動）
@@ -1385,11 +1385,22 @@ def mindb():
     if MINDB is not None:
         return MINDB
     import gzip
-    path = MINDB_PATH or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "minerals.json.gz")
-    if not os.path.exists(path):
-        raise UserError("找不到礦物資料庫 data/minerals.json.gz（請執行 tools/build_mineral_db.py 建立）。")
-    with gzip.open(path, "rb") as f:
-        raw = json.loads(f.read().decode("utf-8"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    paths = [MINDB_PATH] if MINDB_PATH else [os.path.join(here, "minerals.json.gz"),
+                                              os.path.join(here, "data", "minerals.json.gz")]
+    path = next((p for p in paths if p and os.path.exists(p)), None)
+    if not path:
+        raise UserError("找不到礦物資料庫 minerals.json.gz：請把它放在和 xrd_core.py 同一層"
+                        "（或執行 tools/build_mineral_db.py 重新建立）。")
+    with open(path, "rb") as f:
+        blob = f.read()
+    # 有些網頁伺服器會自動解壓 .gz：檢查檔頭，壓縮或未壓縮都能讀
+    if blob[:2] == b"\x1f\x8b":
+        blob = gzip.decompress(blob)
+    try:
+        raw = json.loads(blob.decode("utf-8"))
+    except ValueError:
+        raise UserError("礦物資料庫 minerals.json.gz 已損毀或不完整，請重新下載或重新上傳這個檔案。")
     ents, by_name, by_base = [], {}, {}
     for row in raw["e"]:
         name, src, rid, note, els, pk = row[:6]

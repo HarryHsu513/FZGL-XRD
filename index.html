@@ -179,6 +179,7 @@ body.dragging .dragmask{display:block}
 .mk{font-size:11px}
 #idCandWrap,#idConfWrap,#idAutoWrap{scroll-margin-top:70px}
 .more{display:block;width:100%;text-align:center;padding:9px;border:0;background:none;color:var(--accent);font:500 12.5px var(--font);cursor:pointer}
+.asset-warn{margin:4px 16px 14px;padding:10px 12px;border-radius:10px;background:rgba(255,59,48,.1);color:var(--red);font-size:12.5px;line-height:1.5}
 .toast{position:fixed;left:50%;bottom:58px;transform:translate(-50%,16px);background:rgba(29,29,31,.92);color:#fff;padding:11px 18px;border-radius:12px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;max-width:70vw;z-index:60;backdrop-filter:blur(10px);line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,.2)}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 .toast.err{background:rgba(215,0,21,.94)}
@@ -201,6 +202,7 @@ body.dragging .dragmask{display:block}
     <div class="tabs"><div class="seg wide" id="tabs">
       <button type="button" data-tab="data" class="on">數據</button><button type="button" data-tab="style">樣式</button><button type="button" data-tab="axes">座標軸</button><button type="button" data-tab="text">文字</button><button type="button" data-tab="annot">標註</button><button type="button" data-tab="id">鑑定</button><button type="button" data-tab="out">輸出</button>
     </div></div>
+    <div class="asset-warn" id="assetWarn" hidden></div>
     <section class="pane" data-pane="data"></section>
     <section class="pane" data-pane="style" hidden></section>
     <section class="pane" data-pane="axes" hidden></section>
@@ -235,7 +237,7 @@ body.dragging .dragmask{display:block}
 <input type="file" id="refInput" hidden>
 <script>
 "use strict";
-const VERSION = "2.2";
+const VERSION = "2.3";
 /* 預設值 = Nature 單欄樣式（與 xrd_core.py 的 DEFAULTS 相同） */
 const DEFAULTS = {
   src_wl:0.77491,
@@ -714,11 +716,20 @@ function startEngine(){
   worker.onmessage = e => {
     const m = e.data;
     if (m.type === "progress") setEngine("loading", m.text);
-    else if (m.type === "ready") { setEngine("ready"); if (ITEMS.length) scheduleRender(0); }
+    else if (m.type === "ready") { setEngine("ready"); checkAssets(m.info); if (ITEMS.length) scheduleRender(0); }
     else if (m.type === "fatal") setEngine("error", m.error + "。請確認網路連線後重新整理頁面。");
     else if (m.type === "result") { const w = waiting.get(m.id); if (!w) return; waiting.delete(m.id); (m.meta && m.meta.error) ? w.reject(new Error(m.meta.error)) : w.resolve(m); }
   };
   worker.onerror = e => setEngine("error", e.message || "背景執行緒發生錯誤");
+}
+/* 啟動時檢查必要檔案，缺少時直接說明缺哪個檔 */
+const ASSET_WARN = [];
+async function checkAssets(info){
+  const ok = async p => { try { const r = await fetch(p + "?v=" + VERSION, {method:"HEAD", cache:"no-store"}); return r.ok; } catch (e) { return false; } };
+  if (info && info.fontsLoaded === 0) ASSET_WARN.push("找不到字型檔 fonts.zip，圖中文字暫時改用替代字型（請把 fonts.zip 放在和 index.html 同一層）。");
+  if (!(await ok("minerals.json.gz")) && !(await ok("data/minerals.json.gz")))
+    ASSET_WARN.push("找不到礦物資料庫 minerals.json.gz，「鑑定」功能無法使用（請把它放在和 index.html 同一層）。");
+  if (ASSET_WARN.length) { const w = $("#assetWarn"); w.hidden = false; w.innerHTML = ASSET_WARN.map(esc).join("<br>"); toast(ASSET_WARN[0], true); }
 }
 function call(cmd, args){
   if (!worker) return Promise.reject(new Error("繪圖引擎沒有啟動"));

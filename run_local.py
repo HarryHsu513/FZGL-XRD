@@ -14,6 +14,8 @@ import http.server
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import urllib.parse
 import urllib.request
@@ -63,10 +65,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def say(msg):
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
+
+
+def check_files():
+    """啟動前檢查必要檔案；缺少礦物資料庫時自動從 RRUFF 下載並建立。"""
+    missing = [f for f in ("index.html", "worker.js", "xrd_core.py") if not os.path.exists(os.path.join(HERE, f))]
+    if missing:
+        say("[!] 缺少檔案 / missing files: " + ", ".join(missing) + "  (請和 run_local.py 放在同一個資料夾)")
+    if not (os.path.exists(os.path.join(HERE, "fonts.zip")) or os.path.isdir(os.path.join(HERE, "fonts"))):
+        say("[!] 找不到 fonts.zip：圖中文字會改用替代字型 / fonts.zip not found")
+    has_db = any(os.path.exists(os.path.join(HERE, *p)) for p in (("minerals.json.gz",), ("data", "minerals.json.gz")))
+    builder = os.path.join(HERE, "tools", "build_mineral_db.py")
+    if not has_db:
+        if os.path.exists(builder):
+            say("[i] 找不到 minerals.json.gz，正在從 RRUFF 下載並建立（約 60 MB，需要幾分鐘）…")
+            try:
+                subprocess.run([sys.executable, builder], check=True)
+            except Exception as e:  # noqa: BLE001
+                say("[!] 建立失敗 / build failed: %s  →「鑑定」功能暫時無法使用" % e)
+        else:
+            say("[!] 找不到 minerals.json.gz，「鑑定」功能無法使用 / mineral database not found")
+
+
 Handler.extensions_map.update({".js": "text/javascript", ".py": "text/plain; charset=utf-8", ".gz": "application/gzip"})
+check_files()
 server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), functools.partial(Handler, directory=HERE))
 url = "http://127.0.0.1:%d/" % PORT
-print("XRD Studio:", url, "(Ctrl+C to stop)")
+say("XRD Studio: " + url + "  (Ctrl+C to stop)")
 threading.Timer(0.8, lambda: webbrowser.open(url)).start()
 try:
     server.serve_forever()

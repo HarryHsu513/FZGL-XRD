@@ -7,15 +7,19 @@
 
 ## 資料夾內容
 
+所有檔案都放在同一層（沒有子資料夾，GitHub 網頁上傳時才不會漏掉）：
+
 | 檔案 | 用途 |
 |---|---|
 | `index.html` | 網頁介面 |
 | `worker.js` | 在瀏覽器背景載入 Python 執行環境 |
-| `xrd_core.py` | 讀檔、格式判斷、波長換算（保留原 `convert_two_theta()`）、繪圖與匯出 |
-| `fonts/` | Liberation Sans / Serif 字型（與 Arial / Times New Roman 字寬完全相同，SIL OFL 授權，可自由散布） |
-| `run_local.py` | 在自己電腦執行（並代為查詢 webmineral） |
-| `data/minerals.json.gz` | 礦物參考峰表（RRUFF + AMCSD，12,894 筆、9,121 種） |
-| `tools/build_mineral_db.py` | 重新下載 RRUFF 資料並更新上面的參考峰表 |
+| `xrd_core.py` | 讀檔、格式判斷、波長換算（保留原 `convert_two_theta()`）、繪圖、匯出與礦物鑑定 |
+| `fonts.zip` | Liberation Sans / Serif 字型（與 Arial / Times New Roman 字寬完全相同，SIL OFL 授權）；不用解壓縮 |
+| `minerals.json.gz` | 礦物參考峰表（RRUFF + AMCSD，12,894 筆、9,121 種）；不用解壓縮 |
+| `run_local.py` | 在自己電腦執行（並代為查詢 webmineral）；缺少 `minerals.json.gz` 時會自動下載建立 |
+| `tools/build_mineral_db.py` | （選用）重新下載 RRUFF 資料並更新 `minerals.json.gz`，架站時不需要上傳 |
+
+開啟時若缺少 `fonts.zip` 或 `minerals.json.gz`，畫面上方會直接提示缺了哪個檔案。
 
 ## 礦物鑑定（「鑑定」分頁）
 
@@ -50,13 +54,13 @@ webmineral 不允許其他網頁從瀏覽器直接讀取查詢結果，所以要
 
 吻合度只代表峰位圖譜的相似程度，最後仍需依樣品來源與化學組成判斷（例如石英與 berlinite 圖譜幾乎相同，只能靠元素區分）。
 
-更新參考資料：`python tools/build_mineral_db.py`（會從 rruff.net 下載約 60 MB 的原始檔）。
+更新參考資料：`python tools/build_mineral_db.py`（會從 rruff.net 下載約 60 MB 的原始檔，並覆蓋同一層的 `minerals.json.gz`）。
 資料引用：Lafuente B, Downs R T, Yang H, Stone N (2015) The power of databases: the RRUFF project; Downs R T, Hall-Wallace M (2003) American Mineralogist 88, 247–250。
 
 ## 免費架設到網路上（GitHub Pages）
 
 GitHub Pages 是 GitHub 提供的免費靜態網站空間：不會休眠、不需維護主機，公開儲存庫（public repository）可免費使用。
-本工具只有約 4 MB，遠低於 1 GB 的網站容量上限；每月 100 GB 流量也遠超過一般實驗室的使用量。
+本工具只有約 5 MB，遠低於 1 GB 的網站容量上限；每月 100 GB 流量也遠超過一般實驗室的使用量。
 
 1. 到 <https://github.com> 註冊並登入。
 2. 右上角 **＋ → New repository**。
@@ -64,8 +68,10 @@ GitHub Pages 是 GitHub 提供的免費靜態網站空間：不會休眠、不�
    - 選 **Public**
    - 按 **Create repository**
 3. 在新儲存庫的頁面點 **uploading an existing file**（或 **Add file → Upload files**）。
-4. 把本資料夾**裡面的**所有檔案與 `fonts` 資料夾一起拖進上傳區，按 **Commit changes**。
+4. 把本資料夾**裡面的** 7 個檔案（`index.html`、`worker.js`、`xrd_core.py`、`fonts.zip`、`minerals.json.gz`、`run_local.py`、`README.md`）拖進上傳區，等每個檔案都出現在清單裡，再按 **Commit changes**。
    - ⚠️ `index.html` 必須在儲存庫的最上層，不要把外層資料夾整個拖進去。
+   - ⚠️ `fonts.zip`、`minerals.json.gz` 保持壓縮檔原樣上傳，不要解壓縮。
+   - 上傳後，儲存庫首頁的檔案清單應該看得到這 7 個檔案；少了 `minerals.json.gz`，「鑑定」功能就無法使用。
 5. 到 **Settings → Pages**（左側選單「Code, planning, and automation」區）。
 6. 在 **Build and deployment → Source** 選 **Deploy from a branch**；Branch 選 **main**、資料夾選 **/ (root)**，按 **Save**。
 7. 等 1–2 分鐘後重新整理該頁，上方會出現網址：
