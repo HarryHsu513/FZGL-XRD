@@ -1,6 +1,6 @@
 /* XRD Studio — 背景執行緒（module worker）：在瀏覽器裡載入 Python (Pyodide)、numpy、matplotlib 與 xrd_core.py。
    所有運算都在使用者自己的電腦上進行，檔案不會上傳到任何伺服器。 */
-const APP_VERSION = "2.0";
+const APP_VERSION = "2.2";
 const PYODIDE_VERSION = "314.0.7";
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v" + PYODIDE_VERSION + "/full/";
 const FONT_FILES = [
@@ -9,12 +9,12 @@ const FONT_FILES = [
 ];
 
 const progress = text => self.postMessage({type: "progress", text});
-let api = null;
+let py = null, api = null, dbReady = null;
 
 async function boot() {
   progress("下載 Python 執行環境…");
   const {loadPyodide} = await import(PYODIDE_BASE + "pyodide.mjs");
-  const py = await loadPyodide({indexURL: PYODIDE_BASE});
+  py = await loadPyodide({indexURL: PYODIDE_BASE});
   progress("載入 numpy 與 matplotlib…");
   const files = Promise.all([
     fetch("xrd_core.py?v=" + APP_VERSION).then(r => { if (!r.ok) throw new Error("找不到 xrd_core.py"); return r.text(); }),
@@ -24,13 +24,26 @@ async function boot() {
   progress("載入字型與轉換程式…");
   const [code, ...fonts] = await files;
   py.FS.mkdirTree("/app/fonts");
+  py.FS.mkdirTree("/app/data");
   fonts.forEach((buf, i) => { if (buf) py.FS.writeFile("/app/fonts/" + FONT_FILES[i], new Uint8Array(buf)); });
   py.FS.writeFile("/app/xrd_core.py", code);
-  await py.runPythonAsync("import sys\nsys.path.insert(0, '/app')\nimport xrd_core\nxrd_core.register_fonts('/app/fonts')");
+  await py.runPythonAsync("import sys\nsys.path.insert(0, '/app')\nimport xrd_core\nxrd_core.register_fonts('/app/fonts')\n"
+                          + "xrd_core.MINDB_PATH = '/app/data/minerals.json.gz'");
   api = py.pyimport("xrd_core").api;
   const info = JSON.parse(api("info", "{}").get(0));
   info.fontsLoaded = fonts.filter(Boolean).length;
   return info;
+}
+
+/* 礦物資料庫（約 2.6 MB）只在第一次使用「鑑定」時下載 */
+function ensureDB() {
+  if (!dbReady) {
+    dbReady = fetch("data/minerals.json.gz?v=" + APP_VERSION).then(async r => {
+      if (!r.ok) throw new Error("找不到礦物資料庫 data/minerals.json.gz");
+      py.FS.writeFile("/app/data/minerals.json.gz", new Uint8Array(await r.arrayBuffer()));
+    }).catch(err => { dbReady = null; throw err; });
+  }
+  return dbReady;
 }
 
 const ready = boot();
@@ -41,6 +54,7 @@ self.onmessage = async e => {
   const {id, cmd, args} = e.data;
   try {
     await ready;
+    if (cmd.startsWith("id_")) await ensureDB();
     const res = api(cmd, JSON.stringify(args || {}));
     const meta = JSON.parse(res.get(0));
     let bytes = res.get(1);

@@ -17,6 +17,7 @@ XRD Studio — 核心程式（在瀏覽器中由 Pyodide 執行，也可在本�
 
 import csv
 import io
+import itertools
 import json
 import logging
 import math
@@ -45,7 +46,7 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.mathtext").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.backends.backend_ps").setLevel(logging.ERROR)  # EPS 不支援透明度的提示
 
-APP_VERSION = "2.0"
+APP_VERSION = "2.2"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. 波長設定與換算（原程式碼，邏輯未更動）
@@ -1350,7 +1351,936 @@ def make_zip(files):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 9. 給網頁呼叫的入口：api(指令, JSON 參數) → (JSON 結果, 檔案位元組或 None)
+# 9. 礦物鑑定：最強峰 → webmineral 反查 → RRUFF 驗證 → 扣除已確認礦物的峰後再查
+# ═════════════════════════════════════════════════════════════════════════════
+ELEMENTS = set("""H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr
+Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os
+Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr""".split())
+MINDB = None
+MINDB_PATH = None  # 瀏覽器版由 worker 指定；本機版預設為 data/minerals.json.gz
+POLYTYPE_RE = re.compile(r"(-\d*[A-Z]{1,2}\d*[a-z]?|-\d+[A-Za-z]*)+$")
+ID_TOL = 0.12     # 峰位容許誤差（Cu Kα1 2θ，度）
+ID_SHIFT = 0.25   # 允許的整體位移（樣品高度 / 零點），度
+
+
+def base_name(n):
+    return POLYTYPE_RE.sub("", str(n).strip()).lower()
+
+
+def looks_synthetic(name):
+    """AMCSD 也收錄合成化合物（名稱多為化學式，如 Al6Ca9O18、Br Cu、MnSe、Tricalcium aluminate）。"""
+    b = POLYTYPE_RE.sub("", str(name).strip())
+    if re.search(r"\d", b) or re.search(r"[a-z]\s+[a-z]", b):
+        return True
+    if b.lower() in ("ice",):
+        return False
+    toks = re.findall(r"[A-Z][a-z]?|\(|\)|\s+", b)
+    return "".join(toks) == b and sum(1 for t in toks if t.strip() and t not in "()") >= 2 and \
+        all(t in ELEMENTS for t in toks if t.strip() and t not in "()")
+
+
+def mindb():
+    """載入 RRUFF / AMCSD 精簡峰表（tools/build_mineral_db.py 產生）。"""
+    global MINDB
+    if MINDB is not None:
+        return MINDB
+    import gzip
+    path = MINDB_PATH or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "minerals.json.gz")
+    if not os.path.exists(path):
+        raise UserError("找不到礦物資料庫 data/minerals.json.gz（請執行 tools/build_mineral_db.py 建立）。")
+    with gzip.open(path, "rb") as f:
+        raw = json.loads(f.read().decode("utf-8"))
+    ents, by_name, by_base = [], {}, {}
+    for row in raw["e"]:
+        name, src, rid, note, els, pk = row[:6]
+        n_r = row[6] if len(row) > 6 else 0
+        n_a = row[7] if len(row) > 7 else 0
+        rows = [tok.split(":", 2) for tok in pk.split(";") if tok]
+        d = np.array([float(r[0]) for r in rows])
+        I = np.array([float(r[1]) for r in rows])
+        s = TAG_WL / (2.0 * d)
+        ok = s < 1
+        t = np.full(len(d), np.nan)
+        t[ok] = 2.0 * np.degrees(np.arcsin(s[ok]))
+        top = np.argsort(-I)[:3]
+        e = dict(name=name, src=src, rid=rid, note=note, el=set(els.split()), d=d, I=I, t=t,
+                 hkl=[r[2] if len(r) > 2 else "" for r in rows], top3=d[top], key=src + ":" + rid, nrec=n_r + n_a, n_r=n_r, n_a=n_a)
+        by_name.setdefault(name.lower(), []).append(len(ents))
+        by_base.setdefault(base_name(name), []).append(len(ents))
+        ents.append(e)
+    MINDB = dict(e=ents, by_name=by_name, by_base=by_base, by_key={e["key"]: e for e in ents},
+                 version=raw.get("version", ""), cite=raw.get("cite", []),
+                 names=sorted({e["name"] for e in ents}, key=str.lower))
+    return MINDB
+
+
+def lookup(name):
+    db = mindb()
+    k = str(name).strip().lower()
+    idx = db["by_name"].get(k) or db["by_base"].get(base_name(name)) or []
+    return [db["e"][i] for i in idx]
+
+
+def _sliding_max(a, w):
+    pad = np.pad(a, w, mode="edge")
+    try:
+        from numpy.lib.stride_tricks import sliding_window_view
+        return sliding_window_view(pad, 2 * w + 1).max(axis=1)
+    except ImportError:  # numpy < 1.20
+        return np.array([pad[i:i + 2 * w + 1].max() for i in range(len(a))])
+
+
+def detect_peaks(x, y):
+    """扣除 SNIP 背景後找局部最大值：高於 6 倍雜訊、且 ≥ 最強峰 0.4%；以拋物線內插精修峰位。"""
+    step = float(np.median(np.diff(x))) or 0.02
+    yn = y - snip_background(y, max(1, min(int(round(1.5 / step / 2)), len(y) // 2 - 1)))
+    noise = 1.4826 * float(np.median(np.abs(np.diff(yn)))) / math.sqrt(2) or 1e-12
+    w = max(2, int(round(0.08 / step)))
+    win = _sliding_max(yn, w)
+    top = float(yn.max())
+    cand = np.where((yn >= win) & (yn > 6 * noise) & (yn > 0.004 * top))[0]
+    keep, last = [], -10 ** 9
+    for i in cand:
+        if i - last > w:
+            keep.append(i)
+            last = i
+    t, h = [], []
+    for i in keep:
+        off = 0.0
+        if 0 < i < len(yn) - 1:
+            a, b, c = yn[i - 1], yn[i], yn[i + 1]
+            den = a - 2 * b + c
+            off = 0.5 * (a - c) / den if den != 0 else 0.0
+            off = max(-1.0, min(1.0, off))
+        t.append(x[i] + off * step)
+        h.append(float(yn[i]))
+    t, h = np.array(t), np.array(h)
+    I = 100.0 * h / (h.max() if len(h) else 1.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d = TAG_WL / (2.0 * np.sin(np.radians(t / 2.0)))
+    return dict(t=t, d=d, I=I, range=(float(x.min()), float(x.max())), noise=noise)
+
+
+def observed(S, items, iid):
+    if iid not in DATA:
+        raise UserError("請先選擇要鑑定的曲線。")
+    it = next((i for i in items if i.get("id") == iid), {})
+    d0 = DATA[iid]
+    x, y, _ = converted_xy(d0, effective(d0, S))
+    x = x + (fnum(it.get("shift"), 0.0) or 0.0)
+    o = np.argsort(x)
+    return detect_peaks(x[o], y[o])
+
+
+def score_entry(e, obs, tol=ID_TOL, max_shift=ID_SHIFT, detail=False, weights=None):
+    """
+    把參考圖譜和偵測到的峰比對（Cu Kα1 2θ）：
+      峰強覆蓋 = 參考圖譜中有對到觀測峰的線，佔其總強度的比例
+      強峰     = 參考圖譜中強度 ≥ 最強 50% 的線，必須全部出現
+      偶然機率 = 每根線剛好落在某根觀測峰附近的機率；對上的線越多，越不可能是巧合
+    允許整體位移 ±max_shift（樣品高度、零點誤差）。
+    """
+    t_obs, I_obs = obs["t"], obs["I"]
+    lo, hi = obs["range"]
+    if len(t_obs) < 2:
+        return None
+    t, I = e["t"], e["I"]
+    m = np.isfinite(t) & (t >= lo + 0.2) & (t <= hi - 0.2) & (I >= 3)
+    if m.sum() < 2 or I[m].max() < 20:
+        return dict(testable=False, score=0.0, verdict="na",
+                    reason="此礦物的主要繞射峰不在量測範圍 %.1f–%.1f° 內" % (lo, hi))
+    idx = np.where(m)[0]
+    tr, Ir = t[idx], I[idx]
+    w_obs = np.sqrt(np.clip(I_obs, 0, None)) if weights is None else weights
+    p_rand = min(0.9, len(t_obs) * 2 * tol / max(1.0, hi - lo))
+    strong = Ir >= 0.5 * Ir.max()
+    best = None
+    for s in np.arange(-max_shift, max_shift + 1e-9, 0.02):
+        pos = tr + s
+        j = np.clip(np.searchsorted(t_obs, pos), 1, len(t_obs) - 1)
+        jj = np.where(np.abs(t_obs[j - 1] - pos) <= np.abs(t_obs[j] - pos), j - 1, j)
+        dt = np.abs(t_obs[jj] - pos)
+        ok = dt <= tol
+        cov = float((Ir * ok).sum() / Ir.sum())
+        cov_s = float(ok[strong].mean())
+        err = float(dt[ok].mean() / tol) if ok.any() else 1.0
+        n_sig = int((ok & (Ir >= 5)).sum())
+        sig = 1.0 - p_rand ** n_sig
+        hit = np.unique(jj[ok])
+        expl = float(w_obs[hit].sum() / w_obs.sum()) if w_obs.sum() else 0.0
+        sc = cov * cov_s * (1 - 0.4 * err) * sig * (0.75 + 0.25 * min(1.0, expl * 5))
+        if best is None or sc > best["score"] + 1e-12:
+            best = dict(score=sc, shift=round(float(s), 2), cov=cov, strong=[int(ok[strong].sum()), int(strong.sum())],
+                        lines=[int(ok.sum()), int(len(ok))], err=err, hit=hit.tolist(), _ok=ok, _jj=jj, _dt=dt)
+    sc = best["score"]
+    best.update(testable=True, verdict="high" if sc >= 0.75 else "mid" if sc >= 0.5 else "low")
+    if detail:
+        order = np.argsort(-Ir)[:14]
+        best["table"] = [dict(hkl=e["hkl"][idx[k]], d=round(float(e["d"][idx[k]]), 4), I=round(float(Ir[k])),
+                              t=round(float(tr[k] + best["shift"]), 3),
+                              obs=round(float(t_obs[best["_jj"][k]]), 3) if best["_ok"][k] else None,
+                              diff=round(float(t_obs[best["_jj"][k]] - tr[k] - best["shift"]), 3) if best["_ok"][k] else None)
+                         for k in sorted(order, key=lambda k: tr[k])]
+    for k in ("_ok", "_jj", "_dt"):
+        best.pop(k, None)
+    best["score"] = round(sc, 3)
+    best["cov"] = round(best["cov"], 3)
+    best["err"] = round(best["err"], 3)
+    return best
+
+
+def entry_info(e, sc=None):
+    out = dict(key=e["key"], name=e["name"], src="RRUFF" if e["src"] == "R" else "AMCSD", rid=e["rid"],
+               note=e["note"], el=sorted(e["el"]))
+    if sc:
+        out.update({k: v for k, v in sc.items() if k != "hit"})
+    return out
+
+
+def best_entry(entries, obs, tol, weights=None):
+    scored = [(score_entry(e, obs, tol, weights=weights), e) for e in entries]
+    scored = [(s, e) for s, e in scored if s]
+    if not scored:
+        return None, []
+    scored.sort(key=lambda z: -z[0]["score"])
+    return scored[0], scored
+
+
+def formula_elements(formula):
+    return {s for s in re.findall(r"[A-Z][a-z]?", formula or "") if s in ELEMENTS}
+
+
+def element_ok(els, allowed, required):
+    if required and not required <= els:
+        return False
+    if allowed and not els <= (allowed | {"O", "H"}):
+        return False
+    return True
+
+
+def parse_webmineral(pages):
+    """解析 webmineral X-Ray 查詢結果頁（D1–D3、I1–I3、礦物名稱、化學式）。"""
+    import html as _html
+    total, rows = 0, []
+    for t in pages:
+        m = re.search(r"Listing of\s+(\d+)\s+Records", t)
+        if m:
+            total = max(total, int(m.group(1)))
+        for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S | re.I):
+            tds = [_html.unescape(re.sub(r"<[^>]+>", "", c)).strip()
+                   for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)]
+            if len(tds) >= 8 and re.match(r"^\d+\.\d+", tds[0]):
+                num = lambda s: fnum((re.match(r"\s*([\d.]+)", s) or [None, None])[1])  # noqa: E731
+                link = re.search(r'href="(?:\.\./)?(data/[^"]+)"', tr)
+                rows.append(dict(d=[num(tds[0]), num(tds[2]), num(tds[4])], I=[num(tds[1]), num(tds[3]), num(tds[5])],
+                                 name=tds[6], formula=re.sub(r"\s+", " ", tds[7]),
+                                 url=("https://webmineral.com/" + link.group(1)) if link else ""))
+    return total, rows
+
+
+def explained_by(obs, confirmed, tol):
+    """已確認的礦物（含其位移）可解釋哪些觀測峰。"""
+    owner = [None] * len(obs["t"])
+    for c in confirmed or []:
+        e = mindb()["by_key"].get(c.get("key"))
+        if not e:
+            continue
+        eps = fnum(c.get("eps"), 0.0) or 0.0
+        m = np.isfinite(e["t"]) & (e["I"] >= 3)
+        if eps:
+            sn = TAG_WL / (2 * e["d"][m] * (1 + eps))
+            tr = 2 * np.degrees(np.arcsin(np.clip(sn, 0, 1))) + fnum(c.get("shift"), 0.0)
+        else:
+            tr = e["t"][m] + fnum(c.get("shift"), 0.0)
+        if not len(tr):
+            continue
+        for i, tt in enumerate(obs["t"]):
+            if owner[i] is None and np.min(np.abs(tr - tt)) <= tol:
+                owner[i] = e["name"]
+    return owner
+
+
+def residual_weights(obs, owner):
+    """已被確認礦物解釋的峰，權重降到 5%：排序時優先考慮能解釋剩餘峰的候選。"""
+    w = np.sqrt(np.clip(obs["I"], 0, None))
+    return np.where(np.array([o is not None for o in owner], bool), w * 0.05, w) if len(w) else w
+
+
+def id_peaks(S, items, a):
+    obs = observed(S, items, a.get("id"))
+    owner = explained_by(obs, a.get("confirmed"), fnum(a.get("tol"), ID_TOL))
+    peaks = [dict(i=i, t=round(float(obs["t"][i]), 3), d=round(float(obs["d"][i]), 4), I=round(float(obs["I"][i]), 1),
+                  by=owner[i]) for i in range(len(obs["t"]))]
+    return dict(peaks=peaks, range=obs["range"])
+
+
+def id_search(S, items, a):
+    """候選：webmineral 回傳的頁面（a['pages']）或本機資料庫的三強峰篩選；再用 RRUFF / AMCSD 全圖譜驗證排序。"""
+    obs = observed(S, items, a.get("id"))
+    tol = fnum(a.get("tol"), ID_TOL)
+    weights = residual_weights(obs, explained_by(obs, a.get("confirmed"), tol))
+    pct = fnum(a.get("pct"), 1.5) / 100.0
+    any_order = a.get("any_order", True)
+    Ds = [fnum(v) for v in (a.get("ds") or []) if fnum(v)]
+    allowed = {s for s in re.split(r"[\s,;]+", a.get("allowed") or "") if s in ELEMENTS}
+    required = {s for s in re.split(r"[\s,;]+", a.get("required") or "") if s in ELEMENTS}
+    cands, total, source = [], 0, "webmineral"
+    if a.get("pages"):
+        total, rows = parse_webmineral(a["pages"])
+        seen = set()
+        for r in rows:
+            k = r["name"].lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            if not element_ok(formula_elements(r["formula"]), allowed, required):
+                continue
+            cands.append(dict(name=r["name"], formula=r["formula"], wm_d=r["d"], wm_I=r["I"], url=r["url"]))
+        n_rows = len(seen)
+    else:
+        source = "rruff"
+        if not Ds:
+            raise UserError("請先在峰位表勾選 1–3 根峰。")
+        groups = {}
+        for e in mindb()["e"]:
+            if len(e["top3"]) < len(Ds) or (e["src"] == "A" and looks_synthetic(e["name"])):
+                continue
+            orders = itertools.permutations(range(len(e["top3"])), len(Ds)) if any_order else [range(len(Ds))]
+            if any(all(abs(e["top3"][j] - Ds[k]) <= pct * Ds[k] for k, j in enumerate(o)) for o in orders):
+                groups.setdefault(e["name"].lower(), []).append(e)
+        n_rows = total = len(groups)
+        for k, es in groups.items():
+            if not element_ok(set().union(*(e["el"] for e in es)), allowed, required):
+                continue
+            cands.append(dict(name=es[0]["name"], formula=" ".join(sorted(es[0]["el"])),
+                              wm_d=[round(float(v), 3) for v in es[0]["top3"]], wm_I=None, url=""))
+    out = []
+    for c in cands:
+        entries = lookup(c["name"])
+        if not entries:
+            out.append(dict(c, in_db=False, best=None, n_entries=0))
+            continue
+        b, allsc = best_entry(entries, obs, tol, weights)
+        out.append(dict(c, in_db=True, n_entries=len(entries),
+                        best=entry_info(b[1], b[0]) if b else None))
+    out.sort(key=lambda c: (not c["in_db"], -(c["best"]["score"] if c["best"] else -1)))
+    return dict(source=source, total=total, found=n_rows, kept=len(out), candidates=out[:200])
+
+
+def id_verify(S, items, a):
+    obs = observed(S, items, a.get("id"))
+    tol = fnum(a.get("tol"), ID_TOL)
+    if a.get("key"):
+        e = mindb()["by_key"].get(a["key"])
+        entries = [e] if e else []
+    else:
+        entries = lookup(a.get("name") or "")
+    if not entries:
+        raise UserError("RRUFF / AMCSD 資料庫中找不到「%s」。" % (a.get("name") or a.get("key") or ""))
+    weights = residual_weights(obs, explained_by(obs, a.get("confirmed"), tol))
+    res = []
+    for e in entries:
+        sc = score_entry(e, obs, tol, detail=True, weights=weights)
+        if sc:
+            res.append(entry_info(e, sc))
+    res.sort(key=lambda r: -r["score"])
+    return dict(name=entries[0]["name"], entries=res)
+
+
+def id_ref(a):
+    e = mindb()["by_key"].get(a.get("key"))
+    if not e:
+        raise UserError("找不到參考資料。")
+    lines = ["%.4f %d %s" % (d, I, h) for d, I, h in zip(e["d"], e["I"], e["hkl"])]
+    return dict(name=e["name"], src="RRUFF" if e["src"] == "R" else "AMCSD", rid=e["rid"], note=e["note"],
+                data="\n".join(lines))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 10. 自動全譜辨識（whole-pattern search-match）
+#   1. 全資料庫峰表篩選：每一筆參考資料都比對，容許 2θ 位移與 ±1.2% 晶格縮放（固溶體）
+#   2. 每個候選以峰表（含 Kα2）卷積 pseudo-Voigt 產生全譜（q 空間、多種峰寬）
+#   3. 逐步加入最能降低擬合殘差的礦物（非負加權最小平方 + 平滑背景），並精修位移、晶格、峰寬
+#   4. 依證據分級（確定 / 可能）、反向剔除、列出圖譜幾乎相同的替代礦物
+#   常見度：同名礦物在 RRUFF + AMCSD 的資料筆數，罕見礦物需要更強的證據。
+# ═════════════════════════════════════════════════════════════════════════════
+L1, L2 = TAG_WL, 1.544426  # Cu Kα1, Kα2
+
+
+def fp_to_q(t): return 4 * np.pi * np.sin(np.radians(t / 2)) / L1
+
+
+def fp_screen(db_entries, obs, tol=0.12, shifts=np.arange(-0.18, 0.1801, 0.06), epss=np.arange(-0.012, 0.01201, 0.003)):
+    """Vectorised peak-list FOM for every entry over (2θ shift × lattice scale); returns best score/shift/eps per entry."""
+    t_obs, I_obs = obs["t"], obs["I"]; lo, hi = obs["range"]
+    E = len(db_entries)
+    idx, dd, II, Imax = [], [], [], np.zeros(E)
+    for k, e in enumerate(db_entries):
+        m = np.isfinite(e["t"]) & (e["t"] >= lo - 2) & (e["t"] <= hi + 2) & (e["I"] >= 2)
+        if m.sum():
+            idx.append(np.full(m.sum(), k)); dd.append(e["d"][m]); II.append(e["I"][m])
+    idx, dd, II = np.concatenate(idx), np.concatenate(dd), np.concatenate(II)
+    p_rand = min(0.9, len(t_obs) * 2 * tol / max(1.0, hi - lo))
+    best = np.zeros(E); bs = np.zeros(E); be = np.zeros(E); bcov = np.zeros(E); bn = np.zeros(E)
+    for eps in epss:
+        sn = 1.540598 / (2 * dd * (1 + eps))
+        tt = np.where(sn < 1, 2 * np.degrees(np.arcsin(np.clip(sn, 0, 1))), np.inf)
+        inr = (tt >= lo + 0.15) & (tt <= hi - 0.15)
+        Imx = np.zeros(E); np.maximum.at(Imx, idx[inr], II[inr])
+        Irel = np.where(inr, II / np.maximum(Imx[idx], 1e-9), 0)
+        Iw = np.sqrt(Irel)                           # flatter weights: less sensitive to preferred orientation
+        tot = np.bincount(idx, Iw, E)
+        strong = inr & (Irel >= 0.35)
+        n_strong = np.bincount(idx, strong, E)
+        for s in shifts:
+            pos = tt + s
+            j = np.clip(np.searchsorted(t_obs, pos), 1, len(t_obs) - 1)
+            d = np.minimum(np.abs(t_obs[j - 1] - pos), np.abs(t_obs[j] - pos))
+            ok = inr & (d <= tol)
+            cov = np.bincount(idx, Iw * ok, E) / np.maximum(tot, 1e-9)
+            cs = np.bincount(idx, strong & ok, E) / np.maximum(n_strong, 1)
+            n = np.bincount(idx, ok & (Irel >= 0.05), E)
+            err = np.bincount(idx, np.where(ok, d, 0), E) / np.maximum(np.bincount(idx, ok, E), 1) / tol
+            sc = cov * cs * (1 - 0.3 * err) * (1 - p_rand ** n) * (1 - 0.15 * abs(eps) / 0.012)
+            sc[(Imx < 15) | (n < 2)] = 0
+            upd = sc > best
+            best[upd] = sc[upd]; bs[upd] = s; be[upd] = eps; bcov[upd] = cov[upd]; bn[upd] = n[upd]
+    return best, bs, be, bcov, bn
+
+
+def fp_pv_kernel(n, dq, fwhm, eta=0.5):
+    x = (np.arange(n) - n // 2) * dq
+    g = np.exp(-4 * math.log(2) * x * x / fwhm ** 2)
+    l = 1 / (1 + 4 * x * x / fwhm ** 2)
+    k = eta * l + (1 - eta) * g
+    return np.fft.ifftshift(k / k.sum())
+
+
+def fp_estimate_width(q, yb, obs_t):
+    """median FWHM (in q) of the strongest, reasonably isolated peaks"""
+    ws = []
+    order = np.argsort(-yb[np.searchsorted(q, fp_to_q(obs_t)).clip(0, len(q) - 1)])
+    for i in order[:12]:
+        c = int(np.searchsorted(q, fp_to_q(obs_t[i])))
+        c = max(1, min(len(q) - 2, c))
+        h = yb[c]
+        if h <= 0: continue
+        a = c
+        while a > 0 and yb[a] > h / 2: a -= 1
+        b = c
+        while b < len(q) - 1 and yb[b] > h / 2: b += 1
+        if 2 < b - a < 200: ws.append(q[b] - q[a])
+    return float(np.median(ws)) if ws else 0.01
+
+
+class FPFitter:
+    def __init__(self, x, y, kalpha2, bg_deg=5):
+        o = np.argsort(x); x, y = x[o], y[o]
+        self.x, self.y = x, y
+        q = fp_to_q(x)
+        n = len(x)
+        self.q = np.linspace(q.min(), q.max(), n)
+        self.dq = self.q[1] - self.q[0]
+        yq = np.interp(self.q, q, y)
+        step = float(np.median(np.diff(x)))
+        self.bg = snip_background(yq, max(2, int(round(3.0 / step / 2))))
+        self.yb = yq - self.bg
+        self.yq = yq
+        self.set_weight_power(0.5)
+        u = 2 * (self.q - self.q[0]) / (self.q[-1] - self.q[0]) - 1
+        self.B = np.stack([np.polynomial.legendre.legval(u, np.eye(bg_deg + 1)[k]) for k in range(bg_deg + 1)], 1)
+        self.kalpha2 = kalpha2
+        self.M = 1 << int(math.ceil(math.log2(n * 2)))
+        self.n = n
+        self._prep()
+
+    def set_weight_power(self, p):
+        """weights 1/y^p: p = 0.5 counting statistics (search), smaller p for the final intensity shares"""
+        floor = max(1e-9, 0.01 * float(np.median(np.abs(self.yq))))
+        self.w = np.maximum(self.yq, floor) ** (-p)
+        self.w /= self.w.mean()
+        if hasattr(self, "B"):
+            self._prep()
+
+    def _prep(self):
+        self.Bw = self.B * self.w[:, None]
+        self.bw = self.yb * self.w
+        self.bb = float(self.bw @ self.bw)
+        self.GB = self.Bw.T @ self.Bw
+        self.rB = self.Bw.T @ self.bw
+
+    def set_widths(self, w0, mults=(0.8, 1.0, 1.4, 2.0, 3.0, 5.0)):
+        self.mults = mults
+        self.K = [np.fft.rfft(fp_pv_kernel(self.M, self.dq, w0 * m)) for m in mults]
+
+    def profiles(self, e, shift, eps=0.0, sel=None):
+        """profiles (len(mults) x n) of entry e with 2θ shift and lattice scale (1+eps); sel = mask of lines to include"""
+        m = np.isfinite(e["t"]) & (e["I"] >= 1)
+        if sel is not None:
+            m &= sel
+        d = e["d"][m] * (1 + eps); I = e["I"][m] / 100.0
+        sn = L1 / (2 * d); ok = sn < 1
+        t = 2 * np.degrees(np.arcsin(sn[ok])) + shift; I = I[ok]
+        qs = fp_to_q(t)
+        pos = [(qs, I)]
+        if self.kalpha2:
+            pos.append((qs * L1 / L2, 0.5 * I))
+        S = np.zeros(self.M)
+        for qq, ii in pos:
+            f = (qq - self.q[0]) / self.dq
+            ok = (f >= 0) & (f < self.n - 1)
+            i0 = np.floor(f[ok]).astype(int); fr = f[ok] - i0
+            np.add.at(S, i0, ii[ok] * (1 - fr)); np.add.at(S, i0 + 1, ii[ok] * fr)
+        F = np.fft.rfft(S)
+        return np.stack([np.fft.irfft(F * K, self.M)[: self.n] for K in self.K])
+
+    def solve(self, P):
+        """weighted LSQ: yb ≈ B c + P^T a, a >= 0 (normal equations; active set by dropping negatives)"""
+        nb = self.B.shape[1]
+        Pw = P * self.w[None, :] if len(P) else np.zeros((0, self.n))
+        G_pp = Pw @ Pw.T; G_bp = self.Bw.T @ Pw.T; r_p = Pw @ self.bw
+        cols = list(range(P.shape[0]))
+        while True:
+            k = len(cols)
+            G = np.empty((nb + k, nb + k)); G[:nb, :nb] = self.GB
+            if k:
+                G[:nb, nb:] = G_bp[:, cols]; G[nb:, :nb] = G_bp[:, cols].T; G[nb:, nb:] = G_pp[np.ix_(cols, cols)]
+            rhs = np.concatenate([self.rB, r_p[cols]])
+            G[np.diag_indices_from(G)] += 1e-12 * (np.trace(G) / len(G) + 1e-30)
+            try:
+                coef = np.linalg.solve(G, rhs)
+            except np.linalg.LinAlgError:
+                coef = np.linalg.lstsq(G, rhs, rcond=None)[0]
+            a = coef[nb:]
+            if (a >= 0).all() or not cols:
+                full = np.zeros(P.shape[0]); full[cols] = a
+                ssr = max(0.0, self.bb - 2 * coef @ rhs + coef @ G @ coef)
+                return full, float(ssr), coef[:nb]
+            cols = [c for c, v in zip(cols, a) if v > 0]
+
+
+def fp_parse_hkl(s):
+    s = str(s).strip()
+    v = s.split() if " " in s else re.findall(r"-?\d", s)
+    try:
+        v = [int(a) for a in v]
+    except ValueError:
+        return None
+    return v if len(v) == 3 else None
+
+
+def fp_po_family(e, lo, hi):
+    """axial reflection family (h00 / 0k0 / 00l) that may be enhanced by preferred orientation of plates;
+    returns a boolean mask over e's lines, or None"""
+    key = (round(lo, 1), round(hi, 1))
+    cache = e.setdefault("_po", {})
+    if key in cache:
+        return cache[key]
+    hk = [fp_parse_hkl(h) for h in e["hkl"]]
+    inr = np.isfinite(e["t"]) & (e["t"] >= lo) & (e["t"] <= hi)
+    top5 = set(np.argsort(-np.where(inr, e["I"], -1))[:5])
+    best, bestI = None, 0
+    for ax in range(3):
+        mask = np.array([h is not None and all(h[i] == 0 for i in range(3) if i != ax) and h[ax] != 0 for h in hk])
+        if (mask & inr & (e["I"] >= 3)).sum() >= 2 and any(mask[i] for i in top5):
+            tot = e["I"][mask & inr].sum()
+            if tot > bestI: best, bestI = mask, tot
+    cache[key] = best
+    return best
+
+
+def fp_line_set(e, lo, hi, shift=0.0, imin=10):
+    m = np.isfinite(e["t"]) & (e["t"] >= lo) & (e["t"] <= hi) & (e["I"] >= imin)
+    return e["t"][m] + shift, e["I"][m]
+
+
+def fp_similarity(a, b, lo, hi):
+    """peak-pattern fp_similarity of two entries (0–1): share of strong-line intensity that coincides, both ways"""
+    ta, Ia = fp_line_set(a, lo, hi); tb, Ib = fp_line_set(b, lo, hi)
+    if len(ta) == 0 or len(tb) == 0: return 0.0
+    best = 0.0
+    for s in np.arange(-0.3, 0.301, 0.03):
+        da = np.min(np.abs(ta[:, None] - (tb[None, :] + s)), 1) <= 0.12
+        db = np.min(np.abs(tb[:, None] + s - ta[None, :]), 1) <= 0.12
+        best = max(best, min((Ia * da).sum() / Ia.sum(), (Ib * db).sum() / Ib.sum()))
+    return best
+
+
+NON_MINERAL_ELEMENTS = set("""hydrogen helium lithium beryllium boron nitrogen oxygen fluorine neon sodium magnesium
+aluminum aluminium phosphorus chlorine argon potassium calcium scandium titanium vanadium manganese gallium germanium
+bromine krypton rubidium strontium yttrium zirconium niobium molybdenum technetium cesium caesium barium lanthanum
+cerium praseodymium neodymium promethium samarium europium gadolinium terbium dysprosium holmium erbium thulium
+ytterbium lutetium hafnium rhenium thallium polonium astatine radon francium radium actinium thorium protactinium
+uranium neptunium plutonium americium curium berkelium californium einsteinium xenon iodine carbon""".split())
+
+
+def is_mineral_entry(e):
+    b = base_name(e["name"]).split("-")[0]
+    high_p = bool(re.search(r"\s[IVX]+$", e["name"].strip()))      # e.g. Ice III, Ice VII (high-pressure phases)
+    return not (e["src"] == "A" and (looks_synthetic(e["name"]) or b in NON_MINERAL_ELEMENTS or high_p))
+
+
+COMMON_MINERALS = set("""quartz cristobalite tridymite opal calcite aragonite vaterite dolomite ankerite siderite magnesite rhodochrosite
+smithsonite cerussite strontianite witherite albite oligoclase andesine labradorite bytownite anorthite microcline orthoclase
+sanidine anorthoclase nepheline leucite analcime muscovite phengite paragonite illite biotite phlogopite annite lepidolite
+glauconite celadonite chlorite clinochlore chamosite kaolinite halloysite dickite nacrite montmorillonite nontronite beidellite
+saponite vermiculite palygorskite sepiolite talc pyrophyllite antigorite lizardite chrysotile tremolite actinolite hornblende
+pargasite glaucophane riebeckite augite diopside hedenbergite aegirine jadeite omphacite pigeonite enstatite ferrosilite
+wollastonite forsterite fayalite almandine pyrope grossular andradite spessartine epidote clinozoisite zoisite allanite titanite
+zircon rutile anatase brookite ilmenite magnetite maghemite hematite goethite lepidocrocite ferrihydrite akaganeite gibbsite
+boehmite diaspore corundum spinel chromite pyrite marcasite pyrrhotite chalcopyrite galena sphalerite bornite chalcocite
+covellite arsenopyrite gypsum bassanite anhydrite baryte celestine jarosite alunite natroalunite halite sylvite thenardite
+mirabilite epsomite hexahydrite fluorite fluorapatite hydroxylapatite chlorapatite apatite monazite xenotime kyanite
+sillimanite andalusite staurolite cordierite schorl dravite elbaite tourmaline beryl topaz mullite brucite periclase
+portlandite ettringite hydrotalcite clinoptilolite heulandite chabazite mordenite stilbite phillipsite natrolite laumontite
+prehnite pumpellyite vesuvianite cassiterite scheelite wolframite malachite azurite cuprite sulfur gold copper silver""".split())
+
+
+MINERAL_GROUPS = {
+    "斜長石 plagioclase": "albite oligoclase andesine labradorite bytownite anorthite",
+    "鹼性長石 alkali feldspar": "microcline orthoclase sanidine anorthoclase adularia",
+    "石榴子石 garnet": "almandine pyrope spessartine grossular andradite uvarovite hibschite katoite majorite",
+    "單斜輝石 clinopyroxene": "diopside hedenbergite augite aegirine jadeite omphacite pigeonite petedunnite johannsenite esseneite",
+    "斜方輝石 orthopyroxene": "enstatite ferrosilite clinoenstatite protoenstatite",
+    "橄欖石 olivine": "forsterite fayalite tephroite monticellite",
+    "磷灰石 apatite": "fluorapatite hydroxylapatite chlorapatite apatite carbonate-fluorapatite carbonate-hydroxylapatite",
+    "高嶺石族 kaolin": "kaolinite dickite nacrite halloysite",
+    "膨潤石 smectite": "montmorillonite nontronite beidellite saponite hectorite",
+    "綠泥石 chlorite": "clinochlore chamosite chlorite pennantite nimite",
+    "二八面體雲母 dioctahedral mica": "muscovite phengite illite paragonite celadonite glauconite margarite",
+    "三八面體雲母 trioctahedral mica": "biotite phlogopite annite siderophyllite lepidolite polylithionite eastonite fluorophlogopite",
+    "角閃石 amphibole": "tremolite actinolite ferro-actinolite hornblende magnesio-hornblende ferrohornblende pargasite edenite",
+    "方解石族 calcite group": "calcite magnesite siderite rhodochrosite smithsonite otavite",
+    "白雲石族 dolomite group": "dolomite ankerite kutnohorite minrecordite",
+    "霰石族 aragonite group": "aragonite strontianite witherite cerussite",
+    "綠簾石族 epidote group": "epidote clinozoisite zoisite piemontite allanite",
+    "蛇紋石 serpentine": "antigorite lizardite chrysotile",
+    "鋁矽酸鹽 Al2SiO5": "kyanite sillimanite andalusite mullite",
+}
+MINERAL_GROUP_OF = {m: g for g, ms in MINERAL_GROUPS.items() for m in ms.split()}
+
+
+def fp_group_of(e):
+    b = base_name(e["name"]).split()[0]
+    return MINERAL_GROUP_OF.get(b) or MINERAL_GROUP_OF.get(b.split("-")[0])
+
+
+def fp_is_common(e):
+    b = base_name(e["name"]).split()[0]
+    return b in COMMON_MINERALS or b.split("-")[-1] in COMMON_MINERALS or b.split("-")[0] in COMMON_MINERALS
+
+
+def fp_prior(e):
+    """common rock / soil / ore minerals 1.0; others 0.75–0.9 by number of RRUFF (natural) samples"""
+    return 1.0 if fp_is_common(e) else 0.75 + 0.05 * min(e.get("n_r", 0), 3)
+
+
+def fp_is_rare(e):
+    return not fp_is_common(e) and e.get("n_r", 0) <= 1
+
+
+def full_identify(x, y, db_entries, kalpha2, allowed=None, required=None, pool_size=400, max_phases=12,
+             t_possible=0.003, t_certain=0.015, minerals_only=True, verbose=False):
+    obs = detect_peaks(x, y)
+    obs_lo = detect_peaks_sensitive(x, y)
+    lo, hi = obs_lo["range"]
+    ents = [e for e in db_entries
+            if (not (allowed or required) or element_ok(e["el"], allowed or set(), required or set()))
+            and (not minerals_only or is_mineral_entry(e))]
+    if not ents:
+        return dict(phases=[], rwp=1.0, pool=0, fit_t=np.array([]), fit_obs=np.array([]), fit_calc=np.array([]),
+                    fit_bg=np.array([]))
+    sc, sh, ep, cov, nmatch = fp_screen(ents, obs)
+    order = np.argsort(-sc)
+    pool, seen = [], {}
+    for k in order:
+        if sc[k] <= 0.05: break
+        nm = base_name(ents[k]["name"])
+        if seen.get(nm, 0) >= 2: continue
+        seen[nm] = seen.get(nm, 0) + 1
+        pool.append(int(k))
+        if len(pool) >= pool_size: break
+    F = FPFitter(x, y, kalpha2)
+    F.set_widths(fp_estimate_width(F.q, F.yb, obs["t"]))
+    par = {k: [sh[k], ep[k]] for k in pool}                       # 2θ shift, lattice scale
+    po = {k: fp_po_family(ents[k], lo, hi) for k in pool}           # oriented reflection family (or None)
+    prof, profb = {}, {}
+
+    def make(k, shift, eps):
+        P = F.profiles(ents[k], shift, eps)
+        Pb = F.profiles(ents[k], shift, eps, po[k]) if po[k] is not None else None
+        return P, Pb
+
+    for k in pool:
+        prof[k], profb[k] = make(k, *par[k])
+    t_lo = obs_lo["t"]
+    ssr0 = float((F.yb * F.w) @ (F.yb * F.w))
+    sel, sel_w, tiers, evid = [], [], {}, {}
+
+    PO_MAX = 4.0   # oriented reflections may be enhanced or weakened at most 4× (≈ March–Dollase r 0.6–1.6)
+
+    def build(ks, ws, over=None, fixed=None):
+        rows, owner, kind = [], [], []
+        for i, (k, w) in enumerate(zip(ks, ws)):
+            if over is not None and k in over:
+                pf, pb = over[k]
+            else:
+                pf = prof[k][w]; pb = profb[k][w] if profb[k] is not None else None
+            if pb is None:
+                rows.append(pf); owner.append(i); kind.append(0)
+            elif fixed and i in fixed:
+                rows.append(pf - pb + fixed[i] * pb); owner.append(i); kind.append(0)
+            else:
+                rows.append(pf - pb); owner.append(i); kind.append(1); rows.append(pb); owner.append(i); kind.append(2)
+        return (np.stack(rows) if rows else np.zeros((0, F.n))), np.array(owner, int), np.array(kind, int)
+
+    def fit(ks, ws, over=None):
+        P, own, kind = build(ks, ws, over)
+        a, ss, bgc = F.solve(P)
+        fixed = {}
+        for i in range(len(ks)):
+            r_i = np.where((own == i) & (kind == 1))[0]; p_i = np.where((own == i) & (kind == 2))[0]
+            if len(r_i) and len(p_i):
+                ar, ap = a[r_i[0]], a[p_i[0]]
+                if ap > PO_MAX * ar: fixed[i] = PO_MAX
+                elif ap < ar / PO_MAX: fixed[i] = 1 / PO_MAX
+        if fixed:
+            P, own, kind = build(ks, ws, over, fixed)
+            a, ss, bgc = F.solve(P)
+        comps = [a[own == i] @ P[own == i] for i in range(len(ks))]
+        return ss, comps, bgc
+
+    def lines_of(k, imin=5):
+        e = ents[k]; d = e["d"] * (1 + par[k][1]); sn = L1 / (2 * d)
+        t = np.where(sn < 1, 2 * np.degrees(np.arcsin(np.clip(sn, 0, 1))), np.nan) + par[k][0]
+        m = np.isfinite(t) & (t >= lo + 0.15) & (t <= hi - 0.15) & (e["I"] >= imin)
+        return t[m], e["I"][m]
+
+    q_lo = fp_to_q(t_lo) if len(t_lo) else np.array([])
+    i_lo = np.clip(np.round((q_lo - F.q[0]) / F.dq).astype(int), 0, F.n - 1) if len(t_lo) else np.array([], int)
+
+    def evidence(k, comp_k, comp_others):
+        """top-line presence; observed peaks this phase 'owns' in the fit (≥ 50 % of the model there);
+        owned share of the phase's own fitted intensity"""
+        t, I = lines_of(k, 5)
+        if len(t) == 0 or not len(t_lo): return (0, 0), 0, 0.0
+        near = np.min(np.abs(t[:, None] - t_lo[None, :]), 1) <= 0.12
+        top = np.argsort(-I)[:3]
+        top_ok = (int(near[top].sum()), len(top))
+        ck, co = comp_k[i_lo], comp_others[i_lo]
+        on_line = np.min(np.abs(t_lo[:, None] - t[None, :]), 1) <= 0.12
+        owned = (ck > 0.5 * (ck + co) + 1e-30) & (F.yb[i_lo] > 0) & on_line & (ck > 0.25 * np.maximum(F.yb[i_lo], 1e-30))
+        uI = float(ck[owned].sum() / max(ck[on_line].sum(), 1e-30))
+        return top_ok, int(owned.sum()), uI
+
+    def refine(i):
+        """per-phase 2θ shift / lattice scale / width refinement against data with the other phases"""
+        k = sel[i]; best = None
+        for eps in par[k][1] + np.arange(-0.003, 0.00301, 0.0015):
+            for ds in (-0.04, 0.0, 0.04):
+                P, Pb = make(k, par[k][0] + ds, eps)
+                for w in range(len(F.mults)):
+                    ws = list(sel_w); ws[i] = w
+                    ss, _, _ = fit(sel, ws, {k: (P[w], Pb[w] if Pb is not None else None)})
+                    if best is None or ss < best[0]: best = (ss, eps, ds, w, P, Pb)
+        ss, eps, ds, w, P, Pb = best
+        par[k] = [par[k][0] + ds, eps]; prof[k] = P; profb[k] = Pb; sel_w[i] = w
+        return ss
+
+    ssr, _, _ = fit(sel, sel_w)
+    for step in range(max_phases):
+        _, comps, bgc = fit(sel, sel_w)
+        model = F.B @ bgc + (np.sum(comps, 0) if comps else 0)
+        r = (F.yb - model) * F.w
+        gains = []
+        for k in pool:
+            if k in sel: continue
+            Pw = prof[k] * F.w
+            num = Pw @ r; den = (Pw * Pw).sum(1) + 1e-30
+            g = np.where(num > 0, num * num / den, 0)
+            j = int(np.argmax(g)); gains.append((g[j], k, j))
+        gains.sort(reverse=True)
+        best = None
+        for g, k, j in gains[:20]:
+            gk = fp_group_of(ents[k])
+            if any(fp_similarity(ents[k], ents[kk], lo, hi) >= (0.5 if gk and gk == fp_group_of(ents[kk]) else 0.75)
+                   for kk in sel): continue   # same structure family / same solid-solution series
+            ss, comps, _ = fit(sel + [k], sel_w + [j])
+            comp_k = comps[-1]
+            if comp_k.sum() <= 0: continue
+            dssr = (ssr - ss) / ssr0
+            comp_o = np.sum(comps[:-1], 0) if sel else np.zeros(F.n)
+            (tk, tn), uniq, uI = evidence(k, comp_k, comp_o)
+            rare = fp_is_rare(ents[k])
+            ok_possible = (dssr >= t_possible * (2 if rare else 1) and tk >= min(2, tn) and uI >= 0.10
+                           and uniq >= (3 if rare else 2))
+            if not ok_possible: continue
+            rank = dssr * fp_prior(ents[k]) * (1 - 0.3 * abs(par[k][1]) / 0.012) * (0.4 + 0.6 * sc[k])
+            if best is None or rank > best[0]: best = (rank, k, j, ss, uniq, uI, tk, tn, dssr)
+        if best is None: break
+        _, k, j, ss, uniq, uI, tk, tn, dssr = best
+        sel.append(k); sel_w.append(j)
+        ssr = refine(len(sel) - 1)
+        certain = (dssr >= t_certain and uniq >= 3 and uI >= 0.25 and tk == tn and sc[k] >= 0.45
+                   and (not fp_is_rare(ents[k]) or dssr >= 3 * t_certain))
+        tiers[k] = "certain" if certain else "possible"
+        evid[k] = dict(dssr=dssr, uniq=uniq, uI=uI, top=f"{tk}/{tn}")
+        if verbose: print(f"  + {ents[k]['name']:<18} dSSR {dssr*100:5.2f}%  uniq {uniq:2d}  uniqI {uI:.2f}  top {tk}/{tn}  {tiers[k]}{'  PO' if po[k] is not None else ''}")
+    for i in range(len(sel)):
+        ssr = refine(i)
+    # backward: drop phases whose removal barely matters
+    changed = True
+    while changed and len(sel) > 1:
+        changed = False
+        full, _, _ = fit(sel, sel_w)
+        for i in range(len(sel)):
+            s2, _, _ = fit(sel[:i] + sel[i + 1:], sel_w[:i] + sel_w[i + 1:])
+            if (s2 - full) / ssr0 < t_possible * 0.5:
+                if verbose: print("  - drop", ents[sel[i]]["name"])
+                del sel[i]; del sel_w[i]; changed = True; break
+    ssr, comps, bgc = fit(sel, sel_w)
+    rwp = math.sqrt(ssr / ssr0)
+    F.set_weight_power(0.15)          # final scale factors: closer to an unweighted fit, so strong peaks count fully
+    _, comps, bgc = fit(sel, sel_w)
+    calc = F.bg + F.B @ bgc + (np.sum(comps, 0) if comps else 0)
+    areas = np.array([max(0.0, c.sum()) for c in comps])
+    tot = areas.sum() if len(areas) and areas.sum() > 0 else 1.0
+    out = []
+    for i, (k, w) in enumerate(zip(sel, sel_w)):
+        cands = []
+        for kk in pool:
+            if kk in sel or base_name(ents[kk]["name"]) == base_name(ents[k]["name"]): continue
+            cands.append((fp_similarity(ents[k], ents[kk], lo, hi), kk))
+        cands.sort(reverse=True)
+        alts = []
+        for sim, kk in cands[:8]:
+            if sim < 0.6: break
+            bestss = None
+            for eps in par[kk][1] + np.arange(-0.006, 0.00601, 0.003):
+                P, Pb = make(kk, par[kk][0], eps)
+                for jj in sorted({max(0, w - 1), w, min(len(F.mults) - 1, w + 1)}):
+                    ks = list(sel); ks[i] = kk; ws = list(sel_w); ws[i] = jj
+                    s2, _, _ = fit(ks, ws, {kk: (P[jj], Pb[jj] if Pb is not None else None)})
+                    bestss = s2 if bestss is None else min(bestss, s2)
+            # same structure family is always listed; others only if they fit almost as well
+            if sim >= 0.75 or (bestss - ssr) / ssr0 < 0.015:
+                alts.append(((bestss - ssr) / ssr0, ents[kk]["name"]))
+        g = fp_group_of(ents[k])
+        grp = []
+        if g:   # other members of the same solid-solution series that are chemically allowed and in the candidate pool
+            grp = sorted({ents[kk]["name"] for kk in pool if kk not in sel and fp_group_of(ents[kk]) == g
+                          and base_name(ents[kk]["name"]) != base_name(ents[k]["name"])})
+        alts = list(dict.fromkeys([n for _, n in sorted(alts)] + grp))[:6]
+        out.append(dict(name=ents[k]["name"], key=ents[k]["key"], tier=tiers.get(k, "possible"),
+                        share=float(areas[i] / tot), shift=float(par[k][0]), eps=float(par[k][1]),
+                        width=F.mults[w], alts=alts, lines=lines_of(k, 5)[0], po=po[k] is not None, group=g,
+                        **evid.get(k, {})))
+    out.sort(key=lambda d: -d["share"])
+    tq = 2 * np.degrees(np.arcsin(np.clip(F.q * L1 / (4 * np.pi), 0, 1)))
+    step = max(1, F.n // 1500)
+    return dict(phases=out, rwp=rwp, pool=len(pool), fit_t=tq[::step],
+                fit_obs=(F.yb + F.bg)[::step], fit_calc=calc[::step], fit_bg=F.bg[::step])
+
+
+def detect_peaks_sensitive(x, y):
+    """more sensitive peak list (4σ, 0.15 % of max) for screening and counting unique peaks"""
+    step = float(np.median(np.diff(x))) or 0.02
+    yn = y - snip_background(y, max(1, min(int(round(1.5 / step / 2)), len(y) // 2 - 1)))
+    noise = 1.4826 * float(np.median(np.abs(np.diff(yn)))) / math.sqrt(2) or 1e-12
+    w = max(2, int(round(0.06 / step)))
+    win = _sliding_max(yn, w)
+    cand = np.where((yn >= win) & (yn > 4 * noise) & (yn > 0.0015 * yn.max()))[0]
+    keep, last = [], -10 ** 9
+    for i in cand:
+        if i - last > w: keep.append(i); last = i
+    t = x[np.array(keep, int)] if keep else np.array([])
+    I = 100 * yn[keep] / yn[keep].max() if keep else np.array([])
+    return dict(t=t, I=I, range=(float(x.min()), float(x.max())))
+
+
+TICK_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000", "#8C564B",
+               "#7F7F7F", "#BCBD22", "#17BECF", "#E377C2"]
+
+
+def fit_png(t, obs, calc, bg, phases, width_px=900, dpi=150):
+    """t: 2θ grid; obs/calc/bg: arrays; phases: list of (name, tier, line_positions_2θ)"""
+    n = len(phases)
+    W = width_px / dpi
+    H = W * (0.52 + 0.035 * n)
+    fig = Figure(figsize=(W, H), dpi=dpi)
+    FigureCanvasAgg(fig)
+    gs = fig.add_gridspec(3, 1, height_ratios=[3.0, 0.25 + 0.16 * n, 0.9], hspace=0.0,
+                          left=0.03, right=0.985, top=0.985, bottom=0.11)
+    ax = fig.add_subplot(gs[0]); at = fig.add_subplot(gs[1], sharex=ax); ar = fig.add_subplot(gs[2], sharex=ax)
+    with matplotlib.rc_context({"font.size": 7}):
+        ax.plot(t, obs, color="#8e8e93", lw=0.9, label="obs")
+        ax.plot(t, calc, color="#E64B35", lw=0.7, label="fit")
+        ax.plot(t, bg, color="#c7c7cc", lw=0.6, ls="--")
+        for i, (name, tier, pos) in enumerate(phases):
+            c = TICK_COLORS[i % len(TICK_COLORS)]
+            y = n - i
+            at.vlines(pos, y - 0.35, y + 0.35, color=c, lw=0.7)
+            at.text(1.0, y, " " + name, transform=at.get_yaxis_transform(), ha="right", va="center", fontsize=6.5,
+                    color=c, fontweight="bold" if tier == "certain" else "normal",
+                    bbox=dict(boxstyle="square,pad=0.1", fc="white", ec="none", alpha=0.8))
+        at.set_ylim(0.3, n + 0.7)
+        res = obs - calc
+        ar.plot(t, res, color="#3C5488", lw=0.6)
+        ar.axhline(0, color="#c7c7cc", lw=0.5)
+        lim = max(np.percentile(np.abs(res), 99.5), 1e-9) * 1.2
+        ar.set_ylim(-lim, lim)
+        for a in (ax, at, ar):
+            a.set_yticks([])
+            a.tick_params(axis="x", direction="in", labelsize=7, length=2.5, width=0.5)
+            for sp in a.spines.values():
+                sp.set_linewidth(0.5)
+        ax.tick_params(labelbottom=False); at.tick_params(labelbottom=False)
+        ar.set_xlabel("2θ (°)", fontsize=7, labelpad=1)
+        ax.set_xlim(t.min(), t.max())
+        ax.text(0.005, 0.95, "grey: observed   red: fit", transform=ax.transAxes, fontsize=6.5, va="top", color="#6e6e73")
+        ar.text(0.005, 0.9, "residual", transform=ar.transAxes, fontsize=6.5, va="top", color="#6e6e73")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, facecolor="white")
+    return buf.getvalue()
+
+
+SENSITIVITY = {"high": dict(t_possible=0.003, t_certain=0.015), "std": dict(t_possible=0.006, t_certain=0.02)}
+
+
+def id_auto(S, items, a):
+    import time as _time
+    t0 = _time.time()
+    iid = a.get("id")
+    if iid not in DATA:
+        raise UserError("請先選擇要鑑定的曲線。")
+    it = next((i for i in items if i.get("id") == iid), {})
+    d0 = DATA[iid]
+    eff = effective(d0, S)
+    x, y, _ = converted_xy(d0, eff)
+    x = x + (fnum(it.get("shift"), 0.0) or 0.0)
+    o = np.argsort(x)
+    x, y = x[o], y[o]
+    allowed = {s for s in re.split(r"[\s,;]+", a.get("allowed") or "") if s in ELEMENTS} or None
+    required = {s for s in re.split(r"[\s,;]+", a.get("required") or "") if s in ELEMENTS} or None
+    kalpha2 = eff["type"] == "inhouse"   # 實驗室 Cu 光源有 Kα2；同步輻射為單一波長
+    par = SENSITIVITY.get(a.get("sensitivity") or "high", SENSITIVITY["high"])
+    res = full_identify(x, y, mindb()["e"], kalpha2, allowed, required, minerals_only=a.get("minerals_only", True),
+                        **par)
+    by_key = mindb()["by_key"]
+    phases = []
+    for p in res["phases"]:
+        e = by_key[p["key"]]
+        phases.append(dict(entry_info(e), tier=p["tier"], share=round(p["share"], 4), shift=round(p["shift"], 3),
+                           eps=round(p["eps"], 4), alts=p["alts"], dssr=round(p.get("dssr", 0), 4),
+                           uniq=p.get("uniq", 0), group=p.get("group"), po=bool(p.get("po"))))
+    png = fit_png(res["fit_t"], res["fit_obs"], res["fit_calc"], res["fit_bg"],
+                  [(p["name"], p["tier"], p["lines"]) for p in res["phases"]])
+    return dict(phases=phases, rwp=round(res["rwp"], 4), pool=res["pool"], kalpha2=kalpha2,
+                secs=round(_time.time() - t0, 1)), png
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 11. 給網頁呼叫的入口：api(指令, JSON 參數) → (JSON 結果, 檔案位元組或 None)
 # ═════════════════════════════════════════════════════════════════════════════
 def _api(cmd, a):
     S_in, items = a.get("S") or {}, a.get("items") or []
@@ -1405,6 +2335,19 @@ def _api(cmd, a):
                                                        exported=datetime.now().isoformat(timespec="seconds")),
                                                   ensure_ascii=False, indent=2)))
         return {"name": safe_name(S["fig_name"]) + "_export.zip", "mime": "application/zip"}, make_zip(files)
+    if cmd == "id_peaks":
+        return id_peaks(merge_settings(S_in), items, a), None
+    if cmd == "id_search":
+        return id_search(merge_settings(S_in), items, a), None
+    if cmd == "id_verify":
+        return id_verify(merge_settings(S_in), items, a), None
+    if cmd == "id_auto":
+        return id_auto(merge_settings(S_in), items, a)
+    if cmd == "id_ref":
+        return id_ref(a), None
+    if cmd == "id_names":
+        db = mindb()
+        return dict(names=db["names"], version=db["version"], cite=db["cite"], n=len(db["e"])), None
     if cmd == "info":
         return {"version": APP_VERSION, "matplotlib": matplotlib.__version__, "numpy": np.__version__,
                 "python": sys.version.split()[0], "fonts": sorted(available_fonts() & {
@@ -1430,7 +2373,7 @@ def api(cmd, args_json):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 10. 本機批次轉換（與原 Synchrotron_Convert.py 相同的輸出，不需開介面）
+# 12. 本機批次轉換（與原 Synchrotron_Convert.py 相同的輸出，不需開介面）
 # ═════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     if len(sys.argv) < 2:
