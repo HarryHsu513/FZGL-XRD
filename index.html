@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FZGL XRD Studio</title>
-<meta name="description" content="同步輻射 / In-house XRD 波長轉換與繪圖工具，所有運算在瀏覽器中進行。">
+<title>XRD Studio</title>
+<meta name="description" content="同步輻射 / In-house XRD 波長轉換與期刊級繪圖工具，所有運算在瀏覽器中進行。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6.5' fill='%231d1d1f'/%3E%3Cpath d='M3.5 17.5h3.2l1.4-9.5 1.5 9.5h2l1.1-5.2 1.1 5.2h1.7l1-3.3 1 3.3h2.9' fill='none' stroke='white' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 :root{
@@ -190,7 +190,7 @@ body.dragging .dragmask{display:block}
 <header class="top">
   <div class="brand">
     <svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6.5" fill="currentColor" style="color:var(--text)"/><path d="M3.5 17.5h3.2l1.4-9.5 1.5 9.5h2l1.1-5.2 1.1 5.2h1.7l1-3.3 1 3.3h2.9" fill="none" stroke="var(--bg-side)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
-    <b>FZGL XRD Studio</b><span class="sub">同步輻射 → In-house 波長轉換 · 繪圖</span>
+    <b>XRD Studio</b><span class="sub">同步輻射 → In-house 波長轉換 · 期刊級繪圖</span>
   </div>
   <div class="actions">
     <button class="btn" id="btnCsv" title="匯出所有檔案換算後的 CSV">匯出 CSV</button>
@@ -201,7 +201,7 @@ body.dragging .dragmask{display:block}
 <div class="app">
   <aside class="side" id="side">
     <div class="tabs"><div class="seg wide" id="tabs">
-      <button type="button" data-tab="data" class="on">數據</button><button type="button" data-tab="style">樣式</button><button type="button" data-tab="axes">座標軸</button><button type="button" data-tab="text">文字</button><button type="button" data-tab="annot">標註</button><button type="button" data-tab="id">鑑定（Beta）</button><button type="button" data-tab="out">輸出</button>
+      <button type="button" data-tab="data" class="on">數據</button><button type="button" data-tab="style">樣式</button><button type="button" data-tab="axes">座標軸</button><button type="button" data-tab="text">文字</button><button type="button" data-tab="annot">標註</button><button type="button" data-tab="id">鑑定</button><button type="button" data-tab="out">輸出</button>
     </div></div>
     <div class="asset-warn" id="assetWarn" hidden></div>
     <section class="pane" data-pane="data"></section>
@@ -238,13 +238,13 @@ body.dragging .dragmask{display:block}
 <input type="file" id="refInput" hidden>
 <script>
 "use strict";
-const VERSION = "2.4";
+const VERSION = "2.5";
 /* 預設值 = Nature 單欄樣式（與 xrd_core.py 的 DEFAULTS 相同） */
 const DEFAULTS = {
   src_wl:0.77491,
   smooth:"none", smooth_win:7, smooth_order:2, bg:"none", bg_width:1.5, transform:"linear",
   norm:"max", norm_scope:"view", norm_x1:null, norm_x2:null,
-  mode:"stack", stack_method:"equal", stack_spacing:1.1, stack_gap:0.08, first_on_top:true,
+  mode:"stack", stack_method:"equal", stack_spacing:1.1, stack_gap:0.08, first_on_top:true, y_axes:"shared",
   palette:"okabe", lw:0.75, fill:false, fill_alpha:0.15,
   label_mode:"auto", clabel_pos:"right", clabel_pad:0.06, clabel_color:true,
   legend_loc:"upper right", legend_frame:false, legend_ncol:1, legend_handle:1.6,
@@ -327,10 +327,10 @@ const UI = {
       seg("bg","背景扣除",[["none","無"],["min","最小值歸零"],["snip","SNIP 演算法"]],{wide:true}),
       num("bg_width","背景平滑寬度",{unit:"°",step:0.1,min:0.1,show:"bg=snip",hint:"大於峰寬的數倍；越大背景越平"}),
       seg("transform","強度刻度",[["linear","線性"],["sqrt","平方根"],["log","log₁₀"]],{wide:true}),
-      sel("norm","正規化",[["none","不正規化"],["max","最大值 = 1"],["max100","最大值 = 100"],["minmax","最小–最大 (0–1)"],["area","面積 = 1"],["range","指定區間最大值 = 1"]]),
-      seg("norm_scope","正規化依據",[["view","顯示範圍"],["all","全部數據"]],{show:"norm=max|max100|minmax|area"}),
-      num("norm_x1","區間起點",{unit:"°",step:0.1,...NULL,show:"norm=range"}),
-      num("norm_x2","區間終點",{unit:"°",step:0.1,...NULL,show:"norm=range"}),
+      sel("norm","正規化",[["none","不正規化"],["max","最大值 = 1"],["max100","最大值 = 100"],["minmax","最小–最大 (0–1)"],["area","面積 = 1"],["range","指定區間最大值 = 1"]],{show:"!y_axes=each"}),
+      seg("norm_scope","正規化依據",[["view","顯示範圍"],["all","全部數據"]],{show:"norm=max|max100|minmax|area&!y_axes=each"}),
+      num("norm_x1","區間起點",{unit:"°",step:0.1,...NULL,show:"norm=range&!y_axes=each"}),
+      num("norm_x2","區間終點",{unit:"°",step:0.1,...NULL,show:"norm=range&!y_axes=each"}),
     ]},
   ],
   style: [
@@ -339,6 +339,7 @@ const UI = {
     ]},
     {title:"排列", rows:[
       seg("mode","排列方式",[["stack","堆疊"],["overlay","重疊"]]),
+      seg("y_axes","各曲線的 Y 軸",[["shared","共用"],["each","各自獨立"]]),
       seg("stack_method","間距",[["equal","等距"],["auto","自動避免重疊"]],{show:"mode=stack"}),
       rng("stack_spacing","堆疊間距",0,3,0.05,{unit:"×",show:"mode=stack&stack_method=equal",hint:"以最大強度為單位"}),
       rng("stack_gap","最小間隙",0,1,0.01,{unit:"×",show:"mode=stack&stack_method=auto"}),

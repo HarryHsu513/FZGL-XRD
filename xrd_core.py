@@ -46,7 +46,7 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.mathtext").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.backends.backend_ps").setLevel(logging.ERROR)  # EPS 不支援透明度的提示
 
-APP_VERSION = "2.4"
+APP_VERSION = "2.5"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. 波長設定與換算（原程式碼，邏輯未更動）
@@ -86,7 +86,7 @@ DEFAULTS = {
     "norm": "max", "norm_scope": "view", "norm_x1": None, "norm_x2": None,
     # 排列
     "mode": "stack", "stack_method": "equal", "stack_spacing": 1.1, "stack_gap": 0.08,
-    "first_on_top": True,
+    "first_on_top": True, "y_axes": "shared",
     # 線條與顏色
     "palette": "okabe", "lw": 0.75, "fill": False, "fill_alpha": 0.15,
     # 曲線名稱與圖例
@@ -630,7 +630,15 @@ def prepare(S, items, warnings):
         elif S["transform"] == "log":
             floor = max(float(np.nanmax(y)) * 1e-6, 1e-12)
             y = np.log10(np.clip(y, floor, None))
-        y = normalize(x, y, S, x0, x1)
+        if S["y_axes"] == "each":
+            # 各自的 Y 軸：每條曲線在顯示範圍內的最低點對齊底部、最高點對齊頂部
+            # （等同每條曲線各有一個自動縮放、不顯示的 Y 軸；此時「正規化」不再有作用）
+            mv = (x >= x0) & (x <= x1)
+            ys = y[mv] if mv.sum() >= 2 else y
+            lo, hi = float(np.nanmin(ys)), float(np.nanmax(ys))
+            y = (y - lo) / (hi - lo) if hi > lo else y - lo
+        else:
+            y = normalize(x, y, S, x0, x1)
         y = y * fnum(p["it"].get("scale"), 1.0)
         mv = np.where((x >= x0) & (x <= x1))[0]
         if len(mv) < 2:
