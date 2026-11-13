@@ -2,7 +2,7 @@
    所有運算都在使用者自己的電腦上進行，檔案不會上傳到任何伺服器。
    需要的檔案都和 index.html 放在同一層：xrd_core.py、fonts.zip、minerals.json.gz
   （舊版的 fonts/、data/ 資料夾也仍然可以使用）。 */
-const APP_VERSION = "2.5";
+const APP_VERSION = "2.8";
 const PYODIDE_VERSION = "314.0.7";
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v" + PYODIDE_VERSION + "/full/";
 const FONT_FILES = [
@@ -92,7 +92,7 @@ self.onmessage = async e => {
   const {id, cmd, args} = e.data;
   try {
     await ready;
-    if (cmd.startsWith("id_")) await ensureDB();
+    if (cmd.startsWith("id_") || cmd.startsWith("rv_") || cmd === "quant_export") await ensureDB();
     const res = api(cmd, JSON.stringify(args || {}));
     const meta = JSON.parse(res.get(0));
     let bytes = res.get(1);

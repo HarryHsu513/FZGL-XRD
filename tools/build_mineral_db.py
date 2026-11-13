@@ -21,6 +21,8 @@ RRUFF 更新資料時重新執行即可：
   * AMCSD：只保留常溫常壓的結構（排除標示高壓、高溫或低溫者），同條件時優先較新的結構；
     RRUFF 已有的礦物補 1 筆，RRUFF 沒有的礦物保留 2 筆；全部都不是常溫常壓時保留 1 筆並註明條件。
   * 每筆保留最強的 40 根峰（相對強度 ≥ 1），以 d 值儲存（與波長無關）。
+  * RIR（I/I剛玉，AMCSD 以晶體結構計算）：每筆 AMCSD 記錄附上自己的值，另外依礦物名稱統計所有常溫常壓結構的
+    中位數與 10–90 百分位（全岩半定量用）。
 """
 import gzip
 import json
@@ -184,7 +186,7 @@ def main():
     # —— AMCSD
     za, zc = zipfile.ZipFile(z["dif.zip"]), zipfile.ZipFile(z["amc.zip"])
     amc = {n.rsplit("__", 1)[-1].split(".")[0]: n for n in zc.namelist()}
-    groups = {}
+    groups, rir_all = {}, {}
     for n in za.namelist():
         code = n.rsplit("__", 1)[-1].split(".")[0]
         t = za.read(n).decode("latin-1")
@@ -202,14 +204,18 @@ def main():
         if cond:
             note += " · " + cond
         yr = int(year.group(1)) if year else 0
-        groups.setdefault(name.lower(), []).append((not amb, -yr, code, name, note.strip(), t))
+        m_rir = re.search(r"RIR:\s*([\d.]+)", t)
+        rir = float(m_rir.group(1)) if m_rir else None
+        groups.setdefault(name.lower(), []).append((not amb, -yr, code, name, note.strip(), t, rir))
         n_amcsd[name.lower()] = n_amcsd.get(name.lower(), 0) + 1
+        if rir and rir > 0:
+            rir_all.setdefault(name.lower(), []).append((amb, rir))
     for key, lst in groups.items():
         lst.sort(key=lambda r: (r[0], r[1], r[2]))  # 常溫常壓優先，其次較新的結構
         ambient = [r for r in lst if not r[0]]
         want = 1 if key in rruff_names else 2
         pick = ambient[:want] if ambient else ([] if key in rruff_names else lst[:1])
-        for nonamb, _yr, code, name, note, t in pick:
+        for nonamb, _yr, code, name, note, t, rir in pick:
             els = set()
             if code in amc:
                 on = False
@@ -223,13 +229,22 @@ def main():
                             els.add(e)
             p = compact(peaks_of(t))
             if p:
-                entries.append([name, "A", code, note, " ".join(sorted(els)), p])
+                entries.append([name, "A", code, note, " ".join(sorted(els)), p, rir])
 
-    # 常見度：RRUFF 天然樣品數、AMCSD 結構數（附在每筆資料最後）
+    # 常見度：RRUFF 天然樣品數、AMCSD 結構數，以及 RIR（附在每筆資料最後）
     for e in entries:
         k = e[0].lower()
+        rir = e.pop(6) if len(e) > 6 else None
         e.append(n_rruff.get(k, 0))
         e.append(n_amcsd.get(k, 0))
+        e.append(round(rir, 3) if rir else None)
+    rir_stats = {}
+    for k, lst in rir_all.items():
+        v = sorted(r for a, r in lst if a) or sorted(r for a, r in lst)
+        med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+        v = [r for r in v if med / 4 <= r <= med * 4]          # 去掉明顯錯誤的值
+        q = lambda f: v[min(len(v) - 1, max(0, int(round(f * (len(v) - 1)))))]
+        rir_stats[k] = [round(med, 3), round(q(0.1), 3), round(q(0.9), 3), len(v)]
     # RRUFF 樣品若缺元素資料，以同名礦物補上
     by = {}
     for e in entries:
@@ -245,7 +260,10 @@ def main():
                    "In: Highlights in Mineralogical Crystallography, pp 1-30.",
                    "Downs R T, Hall-Wallace M (2003) The American Mineralogist Crystal Structure Database. "
                    "American Mineralogist 88, 247-250."],
-          "fields": ["name", "source R=RRUFF A=AMCSD", "id", "note", "elements", "d:I:hkl;...", "RRUFF samples", "AMCSD records"],
+          "fields": ["name", "source R=RRUFF A=AMCSD", "id", "note", "elements", "d:I:hkl;...", "RRUFF samples",
+                     "AMCSD records", "RIR (I/Icorundum, AMCSD only)"],
+          "rir_fields": ["median", "p10", "p90", "n"],
+          "rir": rir_stats,
           "e": entries}
     raw = json.dumps(db, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     with gzip.open(OUT, "wb", compresslevel=9) as f:

@@ -180,6 +180,28 @@ body.dragging .dragmask{display:block}
 .chip .cdot{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none}
 #idCandWrap,#idConfWrap,#idAutoWrap{scroll-margin-top:70px}
 .more{display:block;width:100%;text-align:center;padding:9px;border:0;background:none;color:var(--accent);font:500 12.5px var(--font);cursor:pointer}
+[data-pane="id"].clay .bulk-only,[data-pane="id"]:not(.clay) .clay-only{display:none!important}
+.t-check{background:var(--fill2);color:var(--text2)}
+.cfile{padding:9px 14px;border-top:.5px solid var(--line)}.cfile:first-child{border-top:0}
+.cfile .nm{font-size:11.5px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px}
+.cfile .cl{display:flex;gap:8px;align-items:center}.cfile .cl .text{flex:1;width:auto;min-width:0}.cfile .cl select{flex:none;width:122px}
+.cres{padding:12px 14px 14px;border-top:.5px solid var(--line)}.cres:first-child{border-top:0}
+.cres-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:14px;font-weight:600}
+.cres .fitimg{width:100%;margin:10px 0 2px}
+.csub{font-size:11.5px;font-weight:600;color:var(--text3);margin:14px 0 6px;letter-spacing:.02em}
+.mrow{display:flex;gap:10px;align-items:flex-start;padding:4px 0;font-size:13px;line-height:1.35}
+.mrow small{display:block;color:var(--text3);font-size:11.5px;line-height:1.45;margin-top:2px}
+.bbar{display:flex;height:14px;border-radius:5px;overflow:hidden;margin:2px 0 9px;background:var(--fill2)}.bbar span{display:block;height:100%}
+.bgrid{display:grid;grid-template-columns:auto 1fr auto;gap:4px 9px;font-size:12.5px;font-variant-numeric:tabular-nums;align-items:center}
+.bgrid .sw{width:9px;height:9px;border-radius:2px}.bgrid b{font-weight:600}
+.cwarn{font-size:11.5px;color:#b86200;line-height:1.45;margin-top:6px}
+@media (prefers-color-scheme:dark){.cwarn{color:#ffb340}}
+.cnote{font-size:11.5px;color:var(--text3);line-height:1.45;margin-top:6px}
+.methods{font-size:11.5px;line-height:1.55;color:var(--text2);white-space:pre-wrap;max-height:240px;overflow:auto;background:var(--fill2);border-radius:8px;padding:10px 12px;margin:0 14px 12px;user-select:text}
+#clayResWrap{scroll-margin-top:70px}
+.rvcols{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12.5px;color:var(--text2);padding:4px 14px 10px}
+.rvcols select{max-width:100%}
+.rvsec{padding:2px 14px 6px;font-size:11.5px;font-weight:600;color:var(--text3)}
 .asset-warn{margin:4px 16px 14px;padding:10px 12px;border-radius:10px;background:rgba(255,59,48,.1);color:var(--red);font-size:12.5px;line-height:1.5}
 .toast{position:fixed;left:50%;bottom:58px;transform:translate(-50%,16px);background:rgba(29,29,31,.92);color:#fff;padding:11px 18px;border-radius:12px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;max-width:70vw;z-index:60;backdrop-filter:blur(10px);line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,.2)}
 .toast.show{opacity:1;transform:translate(-50%,0)}
@@ -238,7 +260,7 @@ body.dragging .dragmask{display:block}
 <input type="file" id="refInput" hidden>
 <script>
 "use strict";
-const VERSION = "2.5";
+const VERSION = "2.8";
 /* 預設值 = Nature 單欄樣式（與 xrd_core.py 的 DEFAULTS 相同） */
 const DEFAULTS = {
   src_wl:0.77491,
@@ -453,15 +475,21 @@ const UI = {
     ]},
   ],
   id: [
-    {title:"樣品", rows:[cus("idSample")]},
-    {title:"圖上的礦物", id:"idPlotWrap", rows:[cus("idPlot")]},
-    {title:"自動全譜辨識", rows:[cus("idAutoBox")]},
-    {title:"辨識結果", id:"idAutoWrap", rows:[cus("idAuto")]},
-    {title:"逐峰反查 · 1 最強峰", rows:[cus("idPeakBox")], foot:"混合物中最強的幾根峰常來自不同礦物，先只勾 1 根最穩定。"},
-    {title:"逐峰反查 · 2 webmineral", rows:[cus("idQueryBox")]},
-    {title:"候選礦物（依 RRUFF 驗證排序）", id:"idCandWrap", rows:[cus("idCands")]},
-    {title:"RRUFF 驗證", rows:[cus("idManual")]},
-    {title:"已確認的礦物", id:"idConfWrap", rows:[cus("idConf")]},
+    {title:"樣品類型", rows:[cus("idModeBox")]},
+    {title:"樣品", cls:"bulk-only", rows:[cus("idSample")]},
+    {title:"圖上的礦物", id:"idPlotWrap", cls:"bulk-only", rows:[cus("idPlot")]},
+    {title:"自動全譜辨識", cls:"bulk-only", rows:[cus("idAutoBox")]},
+    {title:"辨識結果", id:"idAutoWrap", cls:"bulk-only", rows:[cus("idAuto")]},
+    {title:"逐峰反查 · 1 最強峰", cls:"bulk-only", rows:[cus("idPeakBox")], foot:"混合物中最強的幾根峰常來自不同礦物，先只勾 1 根最穩定。"},
+    {title:"逐峰反查 · 2 webmineral", cls:"bulk-only", rows:[cus("idQueryBox")]},
+    {title:"候選礦物（依 RRUFF 驗證排序）", id:"idCandWrap", cls:"bulk-only", rows:[cus("idCands")]},
+    {title:"RRUFF 驗證", cls:"bulk-only", rows:[cus("idManual")]},
+    {title:"已確認的礦物", id:"idConfWrap", cls:"bulk-only", rows:[cus("idConf")]},
+    {title:"定量 · Rietveld（Profex／GSAS-II）", cls:"bulk-only", rows:[cus("rvBox")], foot:"精修請用 Profex（免費）或 GSAS-II；這裡負責準備精修用的檔案，並把精修結果畫成發表用的圖。"},
+    {title:"檔案與處理方式", cls:"clay-only", rows:[cus("clayFiles")], foot:"依檔名自動判斷，可直接修改；樣品名稱相同的檔案會一起分析。"},
+    {title:"黏土礦物分析", cls:"clay-only", rows:[cus("clayRunBox")]},
+    {title:"結果", id:"clayResWrap", cls:"clay-only", rows:[cus("clayRes")]},
+    {title:"論文用", id:"clayPubWrap", cls:"clay-only", rows:[cus("clayPub")]},
   ],
   out: [
     {title:"圖片尺寸", rows:[
@@ -515,6 +543,7 @@ function buildPanes(){
     for (const g of groups) {
       const w = h(`<div class="gwrap">${g.title ? `<div class="gtitle">${g.title}</div>` : ""}<div class="group"></div>${g.foot ? `<div class="gfoot">${g.foot}</div>` : ""}</div>`);
       if (g.id) w.id = g.id;
+      if (g.cls) w.classList.add(g.cls);
       if (g.show) w.dataset.show = g.show;
       const grp = w.querySelector(".group");
       g.rows.forEach(r => grp.appendChild(buildRow(r)));
@@ -582,11 +611,11 @@ function buildCustoms(){
   $("#setSave").onclick = () => download(new Blob([JSON.stringify({version:VERSION, settings:S}, null, 2)], {type:"application/json"}), "xrd_studio_settings.json");
   $("#setLoad").onclick = () => $("#jsonInput").click();
   $("#jsonInput").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f) return;
-    try { const o = JSON.parse(await f.text()); S = Object.assign(clone(DEFAULTS), pick(o.settings || o)); IDMARK = null;
+    try { const o = JSON.parse(await f.text()); S = Object.assign(clone(DEFAULTS), pick(o.settings || o)); IDMARK = null; CLAY.marks = null;
       (S.refs || []).forEach(r => delete r.curve);   // 設定檔裡的標準卡片不屬於目前的任何檔案
       syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); toast("已載入設定檔"); }
     catch (err) { toast("設定檔格式錯誤", true); } };
-  $("#setReset").onclick = () => { if (!confirm("恢復所有繪圖設定為期刊預設？（不影響已載入的檔案）")) return; S = clone(DEFAULTS); IDMARK = null; syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); };
+  $("#setReset").onclick = () => { if (!confirm("恢復所有繪圖設定為期刊預設？（不影響已載入的檔案）")) return; S = clone(DEFAULTS); IDMARK = null; CLAY.marks = null; syncAll(); renderRefs(); layoutPaper(); updateDims(); scheduleRender(0); };
 }
 
 /* ───────────────────── 檔案清單 ───────────────────── */
@@ -603,7 +632,7 @@ function subline(it){
   return e.convert ? `<span class="fsub conv"><i></i>${t} · <b>${fmtWl(e.src)} → ${fmtWl(e.tgt)} Å</b></span>` : `<span class="fsub"><i></i>${t} · 無需轉換</span>`;
 }
 function renderFiles(){
-  pruneIdPlot();
+  pruneIdPlot(); pruneClay();
   const box = $("#files"); box.innerHTML = "";
   UISTATE.needwl = ITEMS.some(i => i.meta.type === "sync_raw" && !i.meta.hdr_wl);
   updateVisibility();
@@ -834,6 +863,7 @@ function buildIdUI(){
   $("#idAutoBox").innerHTML = `
     <div class="row"><div class="lbl">靈敏度</div><div class="ctl"><div class="seg" id="idSens"><button type="button" data-v="high" class="on">高（寧可多列）</button><button type="button" data-v="std">標準</button></div></div></div>
     <div class="row"><div class="lbl">只搜尋礦物<small>排除 AMCSD 中的合成化合物</small></div><div class="ctl"><input type="checkbox" class="switch" id="idMinOnly" checked></div></div>
+    <div class="row"><div class="lbl">內標<small>加入已知量的標準品，可估計非晶質含量</small></div><div class="ctl"><select id="idStd" style="width:128px"><option value="">無</option><option value="corundum">剛玉 Al₂O₃</option><option value="zincite">氧化鋅 ZnO</option></select><input class="num" id="idStdWt" type="number" step="0.5" min="1" max="60" placeholder="加入量" hidden><span class="unit" id="idStdUnit" hidden>wt%</span></div></div>
     <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="btn primary sm" id="idAutoRun">開始辨識</button><span class="cand-sub" id="idAutoStatus"></span></div>`;
   $("#idPeakBox").innerHTML = `
     <div class="row"><div class="lbl">峰位</div><div class="ctl"><button class="btn sm" id="idDetect">偵測峰位</button></div></div>
@@ -857,6 +887,7 @@ function buildIdUI(){
   });
   $("#idSens").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; $$("#idSens button").forEach(x => x.classList.toggle("on", x === b)); });
   $("#idAutoRun").addEventListener("click", idAutoRun);
+  $("#idStd").addEventListener("change", e => { const on = !!e.target.value; $("#idStdWt").hidden = $("#idStdUnit").hidden = !on; if (on) $("#idStdWt").focus(); });
   $("#idAuto").addEventListener("click", idCandClick);
   $("#idAuto").addEventListener("change", e => { const s = e.target.closest("select[data-entry]"); if (s) { const c = IDS.auto[+s.closest(".cand").dataset.ci]; c.entryKey = s.value; renderAuto(); } });
 
@@ -881,7 +912,7 @@ function buildIdUI(){
 }
 function resetId(keepConfirmed){ IDS.peaks = []; IDS.sel = []; IDS.cands = []; IDS.open = null; IDS.detail = {}; if (!keepConfirmed) IDS.confirmed = [];
   if (IDS.autoMeta && IDS.autoMeta.fitUrl) URL.revokeObjectURL(IDS.autoMeta.fitUrl);
-  IDS.auto = []; IDS.autoMeta = null; IDS.openAuto = null; renderPeaks(); renderDs(); renderCands(); renderAuto(); renderConf(); }
+  IDS.auto = []; IDS.autoMeta = null; IDS.quant = null; IDS.openAuto = null; renderPeaks(); renderDs(); renderCands(); renderAuto(); renderConf(); }
 function refreshIdCurves(){
   const s = $("#idCurve"); if (!s) return;
   if (!ITEMS.find(i => i.id === IDS.curve)) { IDS.curve = (ITEMS.find(i => i.visible) || ITEMS[0] || {}).id || ""; resetId(false); }
@@ -1065,6 +1096,16 @@ async function idCandClick(e){
   const b = e.target.closest("[data-cact]"); if (!b) return;
   const auto = !!b.closest("#idAuto");
   if (b.dataset.cact === "more") { IDS.showMore = !IDS.showMore; renderCands(); return; }
+  if (b.dataset.cact === "qdl") {
+    try { const r = await call("quant_export", payload({})); download(new Blob([r.bytes], {type:r.meta.mime}), r.meta.name); }
+    catch (er) { toast(er.message, true); }
+    return;
+  }
+  if (b.dataset.cact === "qcopy") {
+    try { await navigator.clipboard.writeText((IDS.quant && IDS.quant.methods) || ""); toast("已複製 Methods 段落"); }
+    catch (er) { toast("無法存取剪貼簿，請改用「下載結果」中的 methods.txt", true); }
+    return;
+  }
   if (b.dataset.cact === "allplot") {
     const set = autoPlotSet(), keys = new Set(set.map(c => c.best.key));
     if (set.every(c => onPlot(c.best.key))) S.refs = S.refs.filter(r => !keys.has(r.key));
@@ -1129,11 +1170,13 @@ async function idAutoRun(){
   const st = $("#idAutoStatus"); st.textContent = "辨識中…（約 10–40 秒）"; setBusy(true); $("#idAutoRun").disabled = true;
   const t0 = performance.now();
   try {
-    const r = await call("id_auto", idArgs({allowed:$("#idAllowed").value, required:$("#idRequired").value, sensitivity:sens, minerals_only:$("#idMinOnly").checked}));
+    const std = $("#idStd").value, stdWt = parseFloat($("#idStdWt").value);
+    if (std && !(stdWt > 0 && stdWt < 100)) { st.textContent = ""; return toast("請輸入內標的加入量（wt%）", true); }
+    const r = await call("id_auto", idArgs({allowed:$("#idAllowed").value, required:$("#idRequired").value, sensitivity:sens, minerals_only:$("#idMinOnly").checked, std, std_wt:std ? stdWt : null}));
     const m = r.meta;
     if (IDS.autoMeta && IDS.autoMeta.fitUrl) URL.revokeObjectURL(IDS.autoMeta.fitUrl);
     m.fitUrl = r.bytes ? URL.createObjectURL(new Blob([r.bytes], {type:"image/png"})) : null;
-    IDS.autoMeta = m; IDS.openAuto = null;
+    IDS.autoMeta = m; IDS.openAuto = null; IDS.quant = m.quant || null;
     IDS.auto = m.phases.map(p => ({name:p.name, formula:(p.el || []).join(" "), in_db:true, tier:p.tier, share:p.share, alts:p.alts || [], eps:p.eps, group:p.group, po:p.po,
       best:{key:p.key, src:p.src, rid:p.rid, note:p.note, shift:p.shift, testable:true}}));
     st.textContent = `完成（${((performance.now() - t0) / 1000).toFixed(0)} 秒）`;
@@ -1152,11 +1195,31 @@ function renderAuto(){
     const tags = (key && isConfirmed(key) ? `<span class="tag ok">已確認</span>` : "") + (key && onPlot(key) ? `<span class="tag">圖上</span>` : "");
     const alts = c.alts.length ? `<br>或：${c.alts.map(esc).join("、")}` : "";
     const grp = c.group ? `${esc(c.group.split(" ")[0])} · ` : "";
-    return `<div class="cand" data-ci="${i}"><div class="cand-head" data-cact="toggle"><span class="tier t-${c.tier}">${c.tier === "certain" ? "確定" : "可能"}</span><div style="flex:1;min-width:0"><div class="cand-name">${esc(c.name)} ${tags}</div><div class="cand-sub" style="white-space:normal">${grp}${esc(c.formula)} · 強度佔比 ${(c.share * 100).toFixed(c.share < 0.1 ? 1 : 0)}%${alts}</div></div><span class="icon${open ? " open" : ""}">${ICON.chev}</span></div>${open ? detailHtml(c) : ""}</div>`;
+    const qr = IDS.quant && IDS.quant.ok && IDS.quant.rows.find(r => r.key === c.best.key);
+    const amt = qr && qr.wt != null ? `約 ${fmtWt(qr.wt)} wt%` : `強度佔比 ${(c.share * 100).toFixed(c.share < 0.1 ? 1 : 0)}%`;
+    return `<div class="cand" data-ci="${i}"><div class="cand-head" data-cact="toggle"><span class="tier t-${c.tier}">${c.tier === "certain" ? "確定" : "可能"}</span><div style="flex:1;min-width:0"><div class="cand-name">${esc(c.name)} ${tags}</div><div class="cand-sub" style="white-space:normal">${grp}${esc(c.formula)} · ${amt}${alts}</div></div><span class="icon${open ? " open" : ""}">${ICON.chev}</span></div>${open ? detailHtml(c) : ""}</div>`;
   }).join("");
   const allOn = IDS.auto.length && autoPlotSet().every(c => onPlot(c.best.key));
   if (IDS.auto.length) html += `<div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="btn sm" data-cact="allplot">${allOn ? "從圖上移除這些標準卡片" : (nC ? "「確定」的標準卡片加到圖上" : "標準卡片加到圖上")}</button><button class="btn sm primary" data-cact="allconfirm">確認「確定」的礦物並標到圖上</button></div>`;
+  html += quantHtml(IDS.quant);
   box.innerHTML = html;
+}
+/* 全岩半定量（RIR 法）的結果區塊 */
+const fmtWt = v => v >= 10 ? v.toFixed(0) : v.toFixed(1);
+const QCOL = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#D55E00", "#56B4E9", "#F0E442", "#8C564B", "#7F7F7F", "#BCBD22", "#17BECF", "#E377C2"];
+function quantHtml(q){
+  if (!q) return "";
+  if (!q.ok) return `<div class="cres"><div class="csub" style="margin-top:0">半定量（RIR 法）</div><div class="cnote">${esc(q.why || "")}</div></div>`;
+  const rows = q.rows.filter(r => r.wt != null);
+  const parts = rows.map((r, i) => ({name:r.name, wt:r.wt, lo:r.lo, hi:r.hi, clay:r.clay, tier:r.tier, c:QCOL[i % QCOL.length]}));
+  if (q.amorph) parts.push({name:"非晶質＋未鑑定", wt:q.amorph.wt, lo:q.amorph.lo, hi:q.amorph.hi, c:"#d1d1d6"});
+  const tot = parts.reduce((a, p) => a + p.wt, 0) || 1;
+  const std = q.mode === "internal" ? `（內標：${q.std === "corundum" ? "剛玉" : "氧化鋅"} ${q.std_wt} wt%）` : "（合計 100 %）";
+  return `<div class="cres"><div class="csub" style="margin-top:0">半定量（RIR 法）${std}</div>
+    <div class="bbar">${parts.map(p => `<span style="width:${100 * p.wt / tot}%;background:${p.c}" title="${esc(p.name)}"></span>`).join("")}</div>
+    <div class="bgrid">${parts.map(p => `<span class="sw" style="background:${p.c}"></span><span>${esc(p.name)}${p.clay ? ` <span class="tag">黏土／雲母</span>` : ""}${p.tier === "possible" ? ` <span class="cand-sub">可能</span>` : ""}</span><b>${fmtWt(p.wt)} <span class="cand-sub" style="font-weight:400">${fmtWt(p.lo)}–${fmtWt(p.hi)}</span> wt%</b>`).join("")}</div>
+    ${q.warn.map(w => `<div class="cwarn">${esc(w)}</div>`).join("")}
+    <div class="row" style="padding:12px 0 0;justify-content:flex-start;gap:8px;flex-wrap:wrap;min-height:0"><button class="btn sm primary" data-cact="qdl">下載結果（表格、Methods）</button><button class="btn sm" data-cact="qcopy">複製 Methods</button></div></div>`;
 }
 async function loadNames(){
   if (IDS.names) return;
@@ -1179,8 +1242,270 @@ async function idManualVerify(){
   } catch (e) { toast(e.message, true); }
 }
 
+/* ───────────────────── 定量：Rietveld（匯出精修用檔案、把精修結果畫成發表用的圖）───────────────────── */
+const RVS = {pat:null, refl:[], fig:null, t:null};
+function rvDefaultWl(){
+  const it = ITEMS.find(i => i.id === IDS.curve) || ITEMS[0];
+  if (!it) return 1.540598;
+  return it.meta.type === "sync_raw" ? (it.meta.hdr_wl || S.src_wl || 0.77491) : 1.540598;
+}
+function buildRvUI(){
+  $("#rvBox").innerHTML = `
+    <div class="row"><div class="lbl">1　精修用檔案<small>原始波長的數據、礦物清單（含 AMCSD 編號）與步驟說明</small></div><div class="ctl"><button class="btn sm" id="rvPkg">下載</button></div></div>
+    <div class="row"><div class="lbl">2　精修結果<small>Profex 的 .dia，或 GSAS-II 匯出的 CSV（可同時選反射列表 CSV）</small></div><div class="ctl"><button class="btn sm" id="rvPick">載入</button><input type="file" id="rvFile" multiple accept=".dia,.csv,.txt,.xy,.dat,.xye" hidden></div></div>
+    <div id="rvMore" hidden>
+      <div class="rvsec" id="rvInfo"></div>
+      <div class="rvcols"><span>觀測</span><select id="rvObs"></select><span>計算</span><select id="rvCalc"></select><span>背景</span><select id="rvBkg"></select></div>
+      <div class="row stack"><div class="lbl">礦物刻度<small>每行：礦物名稱, wt%, 誤差（wt% 與誤差可留空）</small></div><div class="ctl"><textarea class="text" id="rvPhases" rows="4" spellcheck="false" placeholder="Quartz, 23.5, 0.4&#10;Illite, 12.1, 0.8"></textarea></div></div>
+      <div class="row"><div class="lbl">波長</div><div class="ctl"><input class="num" id="rvWl" type="number" step="0.00001" style="width:96px"><span class="unit">Å</span></div></div>
+      <div class="row"><div class="lbl">R<sub>wp</sub>　／　GOF</div><div class="ctl"><input class="num" id="rvRwp" type="number" step="0.01" placeholder="%" style="width:70px"><input class="num" id="rvGof" type="number" step="0.01" placeholder="GOF" style="width:70px"></div></div>
+      <div class="row"><div class="lbl">2θ 範圍</div><div class="ctl"><input class="num" id="rvX0" type="number" step="0.5" placeholder="自動" style="width:70px"><span class="unit">–</span><input class="num" id="rvX1" type="number" step="0.5" placeholder="自動" style="width:70px"></div></div>
+      <div class="row"><div class="lbl">顯示背景</div><div class="ctl"><input type="checkbox" class="switch" id="rvBg" checked></div></div>
+      <div id="rvFig"></div>
+      <div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="btn primary sm" id="rvDl">下載 Rietveld 圖</button><span class="cand-sub">格式與尺寸依「輸出」頁</span></div>
+    </div>`;
+  $("#rvPkg").onclick = async () => {
+    if (!IDS.curve) return toast("請先載入檔案", true);
+    const phases = (IDS.confirmed.length ? IDS.confirmed : IDS.auto).map(c => c.name);
+    if (!phases.length) toast("尚未辨識礦物：只匯出數據，礦物清單是空的（可先按「開始辨識」）");
+    try { const r = await call("rv_package", payload({id:IDS.curve, phases})); download(new Blob([r.bytes], {type:r.meta.mime}), r.meta.name); }
+    catch (e) { toast(e.message, true); }
+  };
+  $("#rvPick").onclick = () => $("#rvFile").click();
+  $("#rvFile").onchange = async e => {
+    const files = await Promise.all(Array.from(e.target.files).map(async f => ({name:f.name, text:await f.text()}))); e.target.value = "";
+    if (!files.length) return;
+    try {
+      const r = (await call("rv_load", {files})).meta;
+      const pat = r.loaded.find(l => l.kind === "pattern"); RVS.refl = r.refl_phases || [];
+      if (pat) RVS.pat = pat;
+      if (!RVS.pat) return toast("已載入反射列表；請再載入精修的圖譜檔（含觀測、計算強度）", true);
+      const opt = (sel, none) => (none ? `<option value="-1">（無）</option>` : "") + RVS.pat.cols.slice(1).map(c => `<option value="${c.i}"${c.i === sel ? " selected" : ""}>${esc(c.name)}</option>`).join("");
+      $("#rvObs").innerHTML = opt(RVS.pat.roles.obs); $("#rvCalc").innerHTML = opt(RVS.pat.roles.calc); $("#rvBkg").innerHTML = opt(RVS.pat.roles.bkg ?? -1, true);
+      $("#rvBkg").value = String(RVS.pat.roles.bkg ?? -1);
+      $("#rvInfo").textContent = `${RVS.pat.name} · ${RVS.pat.n} 點 · 2θ ${RVS.pat.xr[0].toFixed(1)}–${RVS.pat.xr[1].toFixed(1)}°` + (RVS.refl.length ? ` · 反射列表：${RVS.refl.join("、")}` : "");
+      if (!$("#rvPhases").value.trim()) {
+        const ids = (IDS.confirmed.length ? IDS.confirmed : IDS.auto).map(c => c.name);
+        const names = ids.concat(RVS.refl.filter(n => !ids.some(m => m.toLowerCase() === n.toLowerCase())));
+        $("#rvPhases").value = names.map(n => n + ", ").join("\n");
+      }
+      if (!$("#rvWl").value) $("#rvWl").value = rvDefaultWl();
+      $("#rvMore").hidden = false; rvRender();
+    } catch (er) { toast(er.message, true); }
+  };
+  ["#rvObs", "#rvCalc", "#rvBkg", "#rvBg"].forEach(q => $(q).addEventListener("change", () => rvRender()));
+  ["#rvPhases", "#rvWl", "#rvRwp", "#rvGof", "#rvX0", "#rvX1"].forEach(q => $(q).addEventListener("input", () => { clearTimeout(RVS.t); RVS.t = setTimeout(rvRender, 500); }));
+  $("#rvDl").onclick = async () => {
+    try { const r = await call("rv_render", payload({opts:rvOpts(), export:true})); download(new Blob([r.bytes], {type:r.meta.mime}), r.meta.name); }
+    catch (e) { toast(e.message, true); }
+  };
+}
+function rvOpts(){
+  const phases = $("#rvPhases").value.split("\n").map(l => l.split(/[,，\t]/).map(t => t.trim())).filter(t => t[0]).map(t => ({name:t[0], wt:t[1] || "", err:t[2] || ""}));
+  return {phases, wl:parseFloat($("#rvWl").value) || rvDefaultWl(), rwp:$("#rvRwp").value, gof:$("#rvGof").value, xmin:$("#rvX0").value, xmax:$("#rvX1").value,
+          col_obs:$("#rvObs").value, col_calc:$("#rvCalc").value, col_bkg:$("#rvBkg").value, show_bkg:$("#rvBg").checked};
+}
+async function rvRender(){
+  if (!RVS.pat) return;
+  try {
+    const r = (await call("rv_render", payload({opts:rvOpts()}))).meta;
+    $("#rvFig").innerHTML = `<img class="fitimg" src="${r.fig}" alt="Rietveld">` + (r.missing.length ? `<div class="cwarn" style="margin:0 14px">資料庫中找不到：${r.missing.map(esc).join("、")}（不會畫出刻度）</div>` : "");
+  } catch (e) { $("#rvFig").innerHTML = `<div class="cwarn" style="margin:0 14px">${esc(e.message)}</div>`; }
+}
+
+/* ───────────────────── 黏土礦物（定向片 AD／EG／加熱／甲醯胺）───────────────────── */
+const CLAY = {assign:{}, res:null, marks:null};
+const CLAY_TREATS = [["AD","AD 風乾"], ["EG","EG 乙二醇"], ["H350","加熱 350 °C"], ["H550","加熱 550 °C"], ["FA","甲醯胺 FA"], ["skip","不分析"]];
+const CLAY_SHORT = {AD:"AD", EG:"EG", H350:"350 °C", H550:"550 °C", FA:"FA"};
+const CLAY_TOKEN = [
+  ["EG", /^(eg\d*|egl|glyc\w*|gly|ethylene\w*|乙二醇\w*)$/i],
+  ["AD", /^(ad|air\w*|n|nat|natural|untreated|風乾|未處理)$/i],
+  ["H550", /^(h|t|heat|heated)?550(c|°c)?$/i],
+  ["H350", /^(h|t|heat|heated)?(300|330|350|375|400)(c|°c)?$/i],
+  ["FA", /^(fa|form\w*|甲醯胺)$/i],
+];
+const TIER_ZH = {certain:"確定", possible:"可能", check:"需確認"};
+const BIS = [["Smectite","膨潤石","#E69F00"], ["Illite","伊萊石","#0072B2"], ["Kaolinite","高嶺石","#009E73"], ["Chlorite","綠泥石","#CC79A7"]];
+const CLAY_MAIN_KEYS = ["S17", "E14", "ML", "C14", "H10", "I10", "K7", "I5"];
+
+/* 從檔名猜樣品與處理方式，例如 S1_EG.txt → 樣品 S1、EG；S1-550.xy → 加熱 550 °C；
+   DT5110glyco_001_mar3450_A75.xye → 樣品 DT5110、EG（處理名稱直接接在樣品編號後面也可以）；TAPE / blank → 不分析 */
+const CLAY_SUFFIX = [["EG", /^(.{2,}?)[-_]?(glycol(ated)?|glyco|glyc|gly|eg)$/i], ["H550", /^(.{2,}?)[-_]?(h550|550c|t550)$/i],
+                     ["H350", /^(.{2,}?)[-_]?(h350|350c|t350|h300|h400)$/i], ["FA", /^(.{2,}?)[-_]?(formamide)$/i],
+                     ["AD", /^(.{2,}?)[-_]?(airdried|air)$/i]];
+function clayGuess(name){
+  const stem = String(name).replace(/\.[^.]+$/, "").replace(/air[\s_\-]*dried/ig, "AD").replace(/ethylene[\s_\-]*glycol(ated)?/ig, "EG");
+  const toks = stem.split(/[_\-\s.()]+/).filter(Boolean);
+  if (toks.some(t => /^(tape|blank|kapton|空白|膠帶)\d*$/i.test(t) || /(tape|blank|kapton)\d*$/i.test(t))) return {sample:toks.join("_"), treat:"skip", auto:true};
+  let treat = null; const rest = [];
+  for (const t of toks) {
+    if (treat) { rest.push(t); continue; }
+    const hit = CLAY_TOKEN.find(([, re]) => re.test(t));
+    if (hit) { treat = hit[0]; continue; }
+    const suf = CLAY_SUFFIX.map(([k, re]) => [k, t.match(re)]).find(([, m]) => m);
+    if (suf) { treat = suf[0]; rest.push(suf[1][1]); continue; }
+    rest.push(t);
+  }
+  return {sample:rest.join("_") || stem, treat:treat || "AD", auto:true};
+}
+/* 所有檔名共同的結尾（例如 _001_mar3450_A75）不放進樣品名稱 */
+function clayTrimCommon(){
+  const auto = ITEMS.map(it => CLAY.assign[it.id]).filter(a => a && a.auto && a.treat !== "skip");
+  if (auto.length < 2) return;
+  const parts = auto.map(a => a.sample.split("_"));
+  let k = 0;
+  while (parts.every(p => p.length - k > 1 && p[p.length - 1 - k] === parts[0][parts[0].length - 1 - k])) k++;
+  if (k) auto.forEach((a, i) => { a.sample = parts[i].slice(0, parts[i].length - k).join("_"); });
+}
+function setIdMode(mode){
+  IDS.mode = mode === "clay" ? "clay" : "bulk";
+  $('[data-pane="id"]').classList.toggle("clay", IDS.mode === "clay");
+  $$("#idMode button").forEach(b => b.classList.toggle("on", b.dataset.v === IDS.mode));
+  try { localStorage.setItem("xrd_id_mode", IDS.mode); } catch (e) {}
+  if (IDS.mode === "clay") clayRefreshFiles(); else onIdTab();
+}
+function buildClayUI(){
+  $("#idModeBox").innerHTML = `<div class="row"><div class="ctl" style="width:100%"><div class="seg" id="idMode" style="display:flex;width:100%"><button type="button" data-v="bulk" class="on" style="flex:1">全岩粉末</button><button type="button" data-v="clay" style="flex:1">黏土定向片（AD／EG）</button></div></div></div>`;
+  $("#clayRunBox").innerHTML = `<div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="btn primary sm" id="clayRun">開始分析</button><span class="cand-sub" id="clayStatus"></span></div>`;
+  $("#clayPub").innerHTML = `<div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap"><button class="btn primary sm" id="clayDl">下載結果（表格、圖、Methods）</button><button class="btn sm" id="clayCopy">複製 Methods</button></div><div class="methods" id="clayMethods"></div>`;
+  $("#clayResWrap").hidden = true; $("#clayPubWrap").hidden = true;
+  $("#idMode").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (b) setIdMode(b.dataset.v); });
+  const fb = $("#clayFiles");
+  fb.addEventListener("input", e => { const el = e.target.closest("[data-cf]"); if (!el) return; const a = CLAY.assign[el.closest(".cfile").dataset.id]; if (a) { a[el.dataset.cf] = el.value; a.auto = false; } });
+  fb.addEventListener("change", e => { const el = e.target.closest("[data-cf]"); if (!el) return; const a = CLAY.assign[el.closest(".cfile").dataset.id]; if (a) a[el.dataset.cf] = el.value; });
+  $("#clayRun").addEventListener("click", clayRun);
+  $("#clayRes").addEventListener("click", clayResClick);
+  $("#clayDl").addEventListener("click", async () => {
+    try { const r = await call("clay_export", payload({})); download(new Blob([r.bytes], {type:r.meta.mime}), r.meta.name); }
+    catch (e) { toast(e.message, true); }
+  });
+  $("#clayCopy").addEventListener("click", async () => {
+    const t = (CLAY.res && CLAY.res.methods) || "";
+    try { await navigator.clipboard.writeText(t); toast("已複製 Methods 段落"); }
+    catch (e) { const r = document.createRange(); r.selectNodeContents($("#clayMethods")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast("請按 Ctrl+C / ⌘C 複製"); }
+  });
+  let mode = "bulk"; try { mode = localStorage.getItem("xrd_id_mode") || "bulk"; } catch (e) {}
+  if (mode === "clay") { IDS.mode = "clay"; $('[data-pane="id"]').classList.add("clay"); $$("#idMode button").forEach(b => b.classList.toggle("on", b.dataset.v === "clay")); }
+}
+function clayRefreshFiles(){
+  const a = CLAY.assign;
+  for (const id of Object.keys(a)) if (!ITEMS.find(i => i.id === id)) delete a[id];
+  let added = false;
+  ITEMS.forEach(it => { if (!a[it.id]) { a[it.id] = clayGuess(it.meta.name); added = true; } });
+  if (added) clayTrimCommon();
+  renderClayFiles();
+}
+function renderClayFiles(){
+  const box = $("#clayFiles"); if (!box) return;
+  if (!ITEMS.length) { box.innerHTML = `<div class="muted">請先在「數據」頁載入同一個樣品的 AD、EG（及加熱）圖譜</div>`; return; }
+  box.innerHTML = ITEMS.map(it => { const a = CLAY.assign[it.id] || clayGuess(it.meta.name);
+    return `<div class="cfile" data-id="${it.id}"><div class="nm" title="${esc(it.meta.name)}">${esc(it.meta.name)}</div><div class="cl"><input class="text" data-cf="sample" value="${esc(a.sample)}" placeholder="樣品名稱" spellcheck="false"><select data-cf="treat">${CLAY_TREATS.map(([v, l]) => `<option value="${v}"${v === a.treat ? " selected" : ""}>${l}</option>`).join("")}</select></div></div>`; }).join("");
+}
+async function clayRun(){
+  clayRefreshFiles();
+  const groups = {};
+  ITEMS.forEach(it => { const a = CLAY.assign[it.id]; if (!a || a.treat === "skip") return; const name = (a.sample || "").trim() || it.meta.name;
+    (groups[name.toLowerCase()] ||= {sample:name, files:[]}).files.push({id:it.id, treat:a.treat}); });
+  const list = Object.values(groups);
+  if (!list.length) return toast("沒有要分析的檔案", true);
+  const st = $("#clayStatus"), btn = $("#clayRun"); st.textContent = "分析中…"; setBusy(true); btn.disabled = true;
+  try {
+    const r = await call("clay_run", payload({groups:list}));
+    CLAY.res = r.meta; renderClayRes(); st.textContent = `完成：${r.meta.samples.length} 個樣品`;
+    $("#clayResWrap").scrollIntoView({behavior:"smooth", block:"start"});
+  } catch (e) { st.textContent = ""; toast("分析失敗：" + e.message, true); }
+  finally { setBusy(false); btn.disabled = false; }
+}
+function renderClayRes(){
+  const wrap = $("#clayResWrap"), box = $("#clayRes"), pub = $("#clayPubWrap"), r = CLAY.res;
+  wrap.hidden = pub.hidden = !r; if (!r) { box.innerHTML = ""; return; }
+  box.innerHTML = r.samples.map((s, i) => {
+    const tags = s.treats.map(t => `<span class="tag">${CLAY_SHORT[t]}</span>`).join("");
+    const mins = s.minerals.length ? s.minerals.map(m => `<div class="mrow"><span class="tier t-${m.tier}">${TIER_ZH[m.tier]}</span><div>${esc(m.zh)} <span class="cand-sub">${esc(m.en)}</span><small>${esc(m.why)}</small></div></div>`).join("") : `<div class="cnote">沒有偵測到明顯的黏土礦物</div>`;
+    let bis;
+    if (s.bisc.ok) {
+      bis = `<div class="bbar">${BIS.map(([k,, c]) => `<span style="width:${s.bisc.pct[k]}%;background:${c}"></span>`).join("")}</div>`
+        + `<div class="bgrid">${BIS.map(([k, zh, c]) => `<span class="sw" style="background:${c}"></span><span>${zh} <span class="cand-sub">${k}</span></span><b>${s.bisc.pct[k].toFixed(1)} ± ${s.bisc.sd[k].toFixed(1)} %</b>`).join("")}</div>`
+        + s.bisc.warn.map(w => `<div class="cwarn">${esc(w)}</div>`).join("");
+    } else bis = `<div class="cnote">${esc(s.bisc.why)}</div>`;
+    const ix = s.indices, rows = [];
+    if (ix.KI_AD != null || ix.KI_EG != null) rows.push(["伊萊石結晶度（Kübler）", [ix.KI_AD != null ? `AD ${ix.KI_AD.toFixed(2)}` : "", ix.KI_EG != null ? `EG ${ix.KI_EG.toFixed(2)}` : ""].filter(Boolean).join(" · ") + " Δ°2θ"]);
+    if (ix.Esq != null) rows.push(["伊萊石化學指數（Esquevin）", `${ix.Esq.toFixed(2)} ± ${ix.Esq_sd.toFixed(2)}`]);
+    if (ix.Sm_FWHM != null) rows.push(["膨潤石 17 Å 峰半高寬", `${ix.Sm_FWHM.toFixed(2)} Δ°2θ`]);
+    const idx = rows.length ? `<div class="kv">${rows.map(([a, b]) => `<span>${a}</span><b style="color:var(--text);font-weight:600">${b}</b>`).join("")}</div>` : `<div class="cnote">沒有可計算的指標</div>`;
+    const notes = s.notes.map(n => `<div class="cnote">${esc(n)}</div>`).join("");
+    const shown = CLAY.marks && CLAY.marks.si === i;
+    return `<div class="cres"><div class="cres-head">${esc(s.sample)} ${tags}</div>
+      <a href="#" data-cfig="${i}" title="開啟大圖"><img class="fitimg" src="${s.fig}" alt="擬合結果"></a>
+      <div class="csub">判讀</div>${mins}
+      <div class="csub">半定量（Biscaye 1965，依 EG 圖譜）</div>${bis}
+      <div class="csub">指標</div>${idx}${notes}
+      <div class="row" style="padding:12px 0 0;justify-content:flex-start;gap:8px;flex-wrap:wrap;min-height:0"><button class="btn sm" data-cmain="${i}">${shown ? "移除主圖上的峰位標示" : "在主圖顯示這組"}</button></div></div>`;
+  }).join("");
+  $("#clayMethods").textContent = r.methods;
+}
+async function clayResClick(e){
+  const f = e.target.closest("[data-cfig]");
+  if (f) { e.preventDefault(); const b = await (await fetch(CLAY.res.samples[+f.dataset.cfig].fig)).blob(); window.open(URL.createObjectURL(b), "_blank", "noopener"); return; }
+  const m = e.target.closest("[data-cmain]");
+  if (m) { const i = +m.dataset.cmain; if (CLAY.marks && CLAY.marks.si === i) { clayUnmark(); scheduleRender(0); renderClayRes(); } else clayShowMain(i); }
+}
+/* 檔案增減時：更新黏土分頁的檔案清單；分析過的檔案被移除時清掉結果與主圖標示 */
+function pruneClay(){
+  if (CLAY.res && CLAY.res.samples.some(s => Object.values(s.files).some(f => !ITEMS.some(x => x.id === f.id)))) {
+    clayUnmark(); CLAY.res = null; renderClayRes(); const st = $("#clayStatus"); if (st) st.textContent = "";
+  } else if (CLAY.marks && CLAY.res) {   // 檔案順序改變時，更新峰位標示的曲線編號
+    if (!hasLines(S.peaks, CLAY.marks.lines)) CLAY.marks = null;
+    else {
+      const nl = clayLines(CLAY.res.samples[CLAY.marks.si]);
+      if (nl.join("\n") !== CLAY.marks.lines.join("\n")) { S.peaks = joinLines(dropLines(S.peaks, CLAY.marks.lines), nl); CLAY.marks.lines = nl; syncControls("peaks"); }
+    }
+  }
+  if (IDS.mode === "clay") clayRefreshFiles();
+}
+/* 一個樣品各處理圖譜的底面峰標示（「標註」頁的峰位格式：2θ, 文字, 曲線編號） */
+function clayLines(s){
+  const lines = [], dtxt = d => d >= 9.5 ? d.toFixed(1) : d.toFixed(2);
+  s.treats.forEach(t => {
+    const k = ITEMS.findIndex(x => x.id === s.files[t].id) + 1, cs = s.comps[t];
+    if (!k) return;
+    const lab = [];
+    for (const key of CLAY_MAIN_KEYS) { const c = cs.find(x => x.key === key && x.present); if (c) lab.push([c.t, dtxt(c.d), c.abbr]); }
+    const k3 = cs.find(x => x.key === "K358" && x.present), c3 = cs.find(x => x.key === "C354" && x.present);
+    if (k3 && c3) lab.push([(k3.t + c3.t) / 2, "3.58/3.54", "Kln/Chl"]);
+    else if (k3 || c3) lab.push([(k3 || c3).t, dtxt((k3 || c3).d), (k3 || c3).abbr]);
+    lab.sort((a, b) => a[0] - b[0]);
+    const merged = [];   // 太靠近的標示合併（例如 AD 的 14.6 Å 膨潤石與 14.2 Å 綠泥石）
+    for (const [tt, d, ab] of lab) {
+      const m = merged[merged.length - 1];
+      if (m && tt - m.last < 2.0) { m.t = (m.t + tt) / 2; m.d += "/" + d; if (!m.ab.split("/").includes(ab)) m.ab += "/" + ab; m.last = tt; }
+      else merged.push({t:tt, d, ab, last:tt});
+    }
+    for (const m of merged) lines.push(`${m.t.toFixed(2)}, ${m.d} Å\\n${m.ab}, ${k}`);
+  });
+  return lines;
+}
+function clayUnmark(){
+  if (!CLAY.marks) return;
+  S.peaks = dropLines(S.peaks, CLAY.marks.lines); CLAY.marks = null; syncControls("peaks");
+}
+/* 在主圖顯示同一樣品的各處理圖譜：只顯示這組、依 AD→EG→加熱 排在最上方、堆疊、上方加 d 值座標軸、標出底面峰 */
+function clayShowMain(i){
+  const s = CLAY.res.samples[i];
+  const ids = s.treats.map(t => s.files[t].id).filter(id => ITEMS.some(x => x.id === id));
+  if (!ids.length) return toast("這組樣品的檔案已被移除", true);
+  clayUnmark();
+  ITEMS = ids.map(id => ITEMS.find(x => x.id === id)).concat(ITEMS.filter(x => !ids.includes(x.id)));
+  ITEMS.forEach(x => x.visible = ids.includes(x.id));
+  const lines = clayLines(s);
+  S.peaks = joinLines(S.peaks, lines); CLAY.marks = {si:i, lines};
+  S.mode = "stack"; S.sec_axis = "d"; S.xmin = 3; S.xmax = 30; S.peak_rot = "0"; S.stack_spacing = Math.max(+S.stack_spacing || 0, 1.4);
+  syncAll(); renderFiles(); scheduleRender(0); renderClayRes();
+  toast("已在主圖顯示：只顯示這組、改為堆疊、上方加 d 值座標軸並標出底面峰；可在其他分頁繼續調整");
+}
+
 /* ───────────────────── 事件 ───────────────────── */
-function selectTab(t){ $$("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); $$(".pane").forEach(p => p.hidden = p.dataset.pane !== t); if (t === "id") onIdTab(); }
+function selectTab(t){ $$("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); $$(".pane").forEach(p => p.hidden = p.dataset.pane !== t); if (t === "id") { if (IDS.mode === "clay") clayRefreshFiles(); else onIdTab(); } }
 function bindUI(){
   $("#tabs").addEventListener("click", e => { const b = e.target.closest("button[data-tab]"); if (b) { selectTab(b.dataset.tab); $("#side").scrollTop = 0; } });
   document.addEventListener("click", e => { if (e.target.closest("[data-pick]")) $("#fileInput").click(); const x = e.target.closest(".note-item .x"); if (x) { NOTES.splice(+x.dataset.ni, 1); renderNotes(); } });
@@ -1198,7 +1523,7 @@ function bindUI(){
   let rt = null; window.addEventListener("resize", () => { layoutPaper(); clearTimeout(rt); rt = setTimeout(() => scheduleRender(0), 300); });
 }
 
-buildPanes(); buildCustoms(); buildIdUI(); renderRefs(); bindAll(); bindFiles(); bindRefs(); bindUI();
+buildPanes(); buildCustoms(); buildIdUI(); buildClayUI(); buildRvUI(); renderRefs(); bindAll(); bindFiles(); bindRefs(); bindUI();
 syncAll(); updateDims(); renderFiles();
 startEngine();
 </script>

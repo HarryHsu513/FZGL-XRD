@@ -46,7 +46,7 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.mathtext").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.backends.backend_ps").setLevel(logging.ERROR)  # EPS 不支援透明度的提示
 
-APP_VERSION = "2.5"
+APP_VERSION = "2.8"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. 波長設定與換算（原程式碼，邏輯未更動）
@@ -694,7 +694,7 @@ def parse_peaks(txt):
         x = fnum(parts[0])
         if x is None:
             continue
-        text = parts[1] if len(parts) > 1 else ""
+        text = (parts[1] if len(parts) > 1 else "").replace("\\n", "\n")   # 「\n」= 換行
         cidx = int(parts[2]) if len(parts) > 2 and re.fullmatch(r"\d+", parts[2] or "") else None
         out.append((x, text, cidx))
     return out
@@ -1414,6 +1414,7 @@ def mindb():
         name, src, rid, note, els, pk = row[:6]
         n_r = row[6] if len(row) > 6 else 0
         n_a = row[7] if len(row) > 7 else 0
+        rir = row[8] if len(row) > 8 else None
         rows = [tok.split(":", 2) for tok in pk.split(";") if tok]
         d = np.array([float(r[0]) for r in rows])
         I = np.array([float(r[1]) for r in rows])
@@ -1423,12 +1424,13 @@ def mindb():
         t[ok] = 2.0 * np.degrees(np.arcsin(s[ok]))
         top = np.argsort(-I)[:3]
         e = dict(name=name, src=src, rid=rid, note=note, el=set(els.split()), d=d, I=I, t=t,
-                 hkl=[r[2] if len(r) > 2 else "" for r in rows], top3=d[top], key=src + ":" + rid, nrec=n_r + n_a, n_r=n_r, n_a=n_a)
+                 hkl=[r[2] if len(r) > 2 else "" for r in rows], top3=d[top], key=src + ":" + rid, nrec=n_r + n_a, n_r=n_r, n_a=n_a,
+                 rir=rir)
         by_name.setdefault(name.lower(), []).append(len(ents))
         by_base.setdefault(base_name(name), []).append(len(ents))
         ents.append(e)
     MINDB = dict(e=ents, by_name=by_name, by_base=by_base, by_key={e["key"]: e for e in ents},
-                 version=raw.get("version", ""), cite=raw.get("cite", []),
+                 version=raw.get("version", ""), cite=raw.get("cite", []), rir=raw.get("rir", {}),
                  names=sorted({e["name"] for e in ents}, key=str.lower))
     return MINDB
 
@@ -2053,6 +2055,8 @@ def full_identify(x, y, db_entries, kalpha2, allowed=None, required=None, pool_s
                 rows.append(pf - pb); owner.append(i); kind.append(1); rows.append(pb); owner.append(i); kind.append(2)
         return (np.stack(rows) if rows else np.zeros((0, F.n))), np.array(owner, int), np.array(kind, int)
 
+    last = {}
+
     def fit(ks, ws, over=None):
         P, own, kind = build(ks, ws, over)
         a, ss, bgc = F.solve(P)
@@ -2067,6 +2071,9 @@ def full_identify(x, y, db_entries, kalpha2, allowed=None, required=None, pool_s
             P, own, kind = build(ks, ws, over, fixed)
             a, ss, bgc = F.solve(P)
         comps = [a[own == i] @ P[own == i] for i in range(len(ks))]
+        # 每個礦物 100 % 峰（無方位效應時）的積分強度 = 非軸向那一列的係數
+        last["scales"] = [float(a[(own == i) & (kind != 2)][0]) if ((own == i) & (kind != 2)).any() else 0.0
+                          for i in range(len(ks))]
         return ss, comps, bgc
 
     def lines_of(k, imin=5):
@@ -2161,6 +2168,7 @@ def full_identify(x, y, db_entries, kalpha2, allowed=None, required=None, pool_s
     rwp = math.sqrt(ssr / ssr0)
     F.set_weight_power(0.15)          # final scale factors: closer to an unweighted fit, so strong peaks count fully
     _, comps, bgc = fit(sel, sel_w)
+    scales = list(last.get("scales", [0.0] * len(sel)))
     calc = F.bg + F.B @ bgc + (np.sum(comps, 0) if comps else 0)
     areas = np.array([max(0.0, c.sum()) for c in comps])
     tot = areas.sum() if len(areas) and areas.sum() > 0 else 1.0
@@ -2190,7 +2198,13 @@ def full_identify(x, y, db_entries, kalpha2, allowed=None, required=None, pool_s
             grp = sorted({ents[kk]["name"] for kk in pool if kk not in sel and fp_group_of(ents[kk]) == g
                           and base_name(ents[kk]["name"]) != base_name(ents[k]["name"])})
         alts = list(dict.fromkeys([n for _, n in sorted(alts)] + grp))[:6]
+        # 100 % 峰的積分強度換成 2θ 單位（q 網格 → 2θ：除以 cos θ）
+        e = ents[k]
+        j100 = int(np.argmax(e["I"]))
+        sn = L1 / (2 * e["d"][j100] * (1 + par[k][1]))
+        cos_t = math.cos(math.asin(min(sn, 1.0))) if sn < 1 else 1.0
         out.append(dict(name=ents[k]["name"], key=ents[k]["key"], tier=tiers.get(k, "possible"),
+                        scale=max(0.0, scales[i]) / cos_t,
                         share=float(areas[i] / tot), shift=float(par[k][0]), eps=float(par[k][1]),
                         width=F.mults[w], alts=alts, lines=lines_of(k, 5)[0], po=po[k] is not None, group=g,
                         **evid.get(k, {})))
@@ -2265,6 +2279,342 @@ def fit_png(t, obs, calc, bg, phases, width_px=900, dpi=150):
 
 SENSITIVITY = {"high": dict(t_possible=0.003, t_certain=0.015), "std": dict(t_possible=0.006, t_certain=0.02)}
 
+# ── 全岩半定量：RIR 法（Chung 1974；Hubbard & Snyder 1988）──────────────────────────────
+#   w_i ∝ I_i / RIR_i，I_i = 擬合得到的該礦物 100 % 峰積分強度；RIR = I/I剛玉（AMCSD 由晶體結構計算）
+CLAY_LIKE = set("""illite halloysite kaolinite dickite nacrite montmorillonite nontronite beidellite saponite hectorite
+vermiculite palygorskite sepiolite glauconite celadonite chlorite clinochlore chamosite muscovite phengite paragonite
+biotite phlogopite annite talc pyrophyllite antigorite lizardite chrysotile""".split())
+INTERNAL_STD = {"corundum": ("剛玉", {"Al"}), "zincite": ("氧化鋅（紅鋅礦）", {"Zn"})}
+ID_LAST = {}
+
+
+def _inst_width(x, y):
+    """由孤立的強峰量測半高寬隨角度的變化：FWHM(2θ) = a + b·tanθ（實驗室與同步輻射的峰都會隨角度變寬）"""
+    obs = detect_peaks(x, y)
+    step = float(np.median(np.diff(x))) or 0.02
+    yb = y - snip_background(y, max(1, min(int(round(1.5 / step / 2)), len(y) // 2 - 1)))
+    ts = obs["t"][np.argsort(-obs["I"])][:30]
+    pts = []
+    for t in ts:
+        i = int(np.clip(np.searchsorted(x, t), 1, len(x) - 2))
+        h = yb[i]
+        if h <= 0:
+            continue
+        a = i
+        while a > 0 and yb[a] > h / 2 and x[i] - x[a] < 1.5:
+            a -= 1
+        b = i
+        while b < len(x) - 1 and yb[b] > h / 2 and x[b] - x[i] < 1.5:
+            b += 1
+        fw = x[b] - x[a]
+        if fw <= 2 * step or fw >= 1.5:
+            continue
+        if np.any((np.abs(obs["t"] - t) > 1e-6) & (np.abs(obs["t"] - t) < 2.0 * fw)):
+            continue                                   # 旁邊有其他峰：不夠孤立
+        pts.append((t, fw))
+    if len(pts) < 4:
+        w = float(np.median([p[1] for p in pts])) if pts else 0.1
+        return lambda t: np.full(np.shape(t), w, float)
+    T = np.tan(np.radians(np.array([p[0] for p in pts]) / 2))
+    W = np.array([p[1] for p in pts])
+    keep = np.ones(len(T), bool)
+    for _ in range(2):
+        A = np.stack([np.ones(keep.sum()), T[keep]], 1)
+        c = np.linalg.lstsq(A, W[keep], rcond=None)[0]
+        r = W - (c[0] + c[1] * T)
+        mad = 1.4826 * float(np.median(np.abs(r[keep]))) + 1e-9
+        keep = np.abs(r) <= 2.5 * mad
+        if keep.sum() < 3:
+            break
+    a0, b0 = float(c[0]), float(max(c[1], 0.0))
+    if a0 <= 0:
+        a0, b0 = float(np.median(W)), 0.0
+    return lambda t: a0 + b0 * np.tan(np.radians(np.asarray(t, float) / 2))
+
+
+def quant_refit(x, y, kalpha2, phases):
+    """
+    定量用的重新擬合：已鑑定的礦物以 2θ 空間的峰形重建（半高寬隨角度變化），並逐一精修每個礦物的
+    2θ 位移、晶格縮放與峰寬，回傳每個礦物 100 % 峰（Kα1）的積分強度。
+    鑑定階段為了速度使用固定峰寬與較粗的晶格格點，高角度峰的位置與強度會有偏差，不適合直接定量。
+    """
+    o = np.argsort(x)
+    x, y = np.asarray(x, float)[o], np.asarray(y, float)[o]
+    step = float(np.median(np.diff(x))) or 0.02
+    bg = snip_background(y, max(2, int(round(3.0 / step / 2))))
+    yb = y - bg
+    winst = _inst_width(x, y)
+    lo, hi = float(x[0]), float(x[-1])
+    u = 2 * (x - lo) / (hi - lo) - 1
+    B = np.stack([np.polynomial.legendre.legval(u, np.eye(6)[k]) for k in range(6)], 1)
+    floor = max(1e-9, 0.01 * float(np.median(np.abs(y))))
+    w = np.maximum(y, floor) ** -0.15
+    w /= w.mean()
+    Bw, ybw = B * w[:, None], yb * w
+    db = mindb()
+    ents = [db["by_key"][p["key"]] for p in phases]
+    pos = [fp_po_family(e, lo, hi) for e in ents]
+    n = len(phases)
+    cache = {}
+
+    def prof(i, shift, eps, mult, eta, axial):
+        key = (i, round(shift, 4), round(eps, 5), mult, eta, axial)
+        if key in cache:
+            return cache[key]
+        e = ents[i]
+        m = np.isfinite(e["t"]) & (e["I"] >= 1)
+        if axial:
+            m &= pos[i]
+        d = e["d"][m] * (1 + eps)
+        I = e["I"][m] / 100.0
+        P = np.zeros(len(x))
+        for lam, f in ((L1, 1.0), (L2, 0.5)) if kalpha2 else ((L1, 1.0),):
+            sn = lam / (2 * d)
+            ok = sn < 1
+            t = 2 * np.degrees(np.arcsin(sn[ok])) + shift
+            for tt, ii in zip(t, I[ok]):
+                if tt < lo - 2 or tt > hi + 2:
+                    continue
+                fw = mult * float(winst(tt))
+                a, b = np.searchsorted(x, [tt - 15 * fw, tt + 15 * fw])
+                if b > a:
+                    P[a:b] += f * ii * _pv_unit(x[a:b], tt, fw, eta)
+        if len(cache) > 4000:
+            cache.clear()
+        cache[key] = P
+        return P
+
+    def solve(par, eta):
+        """par[i] = [shift, eps, mult]；回傳 (加權殘差平方和, 各礦物 100 % 峰強度)"""
+        def build(fixed):
+            cols, own, kind = [], [], []
+            for i in range(n):
+                sh, ep, mu = par[i]
+                pf = prof(i, sh, ep, mu, eta, False)
+                if pos[i] is None:
+                    cols.append(pf); own.append(i); kind.append(0)
+                else:
+                    pb = prof(i, sh, ep, mu, eta, True)
+                    if i in fixed:
+                        cols.append(pf - pb + fixed[i] * pb); own.append(i); kind.append(0)
+                    else:
+                        cols += [pf - pb, pb]; own += [i, i]; kind += [1, 2]
+            return np.stack(cols, 1), np.array(own), np.array(kind)
+        fixed = {}
+        for _ in range(2):
+            D, own, kind = build(fixed)
+            k = D.shape[1]
+            A = np.hstack([D * w[:, None], Bw])
+            th = _lsq_peaks_bg(A, ybw, k)
+            new = {}
+            for i in range(n):
+                r_i = np.where((own == i) & (kind == 1))[0]
+                p_i = np.where((own == i) & (kind == 2))[0]
+                if len(r_i) and len(p_i):
+                    ar, ap = th[r_i[0]], th[p_i[0]]
+                    if ap > 4.0 * ar:
+                        new[i] = 4.0          # 方位效應最多放大或減弱 4 倍
+                    elif ap < ar / 4.0:
+                        new[i] = 0.25
+            if not new or new == fixed:
+                break
+            fixed = {**fixed, **new}
+        r = ybw - A @ th
+        return float(r @ r), [float(th[np.where((own == i) & (kind != 2))[0][0]]) for i in range(n)]
+
+    par = [[float(p.get("shift", 0.0)), float(p.get("eps", 0.0)), 1.0] for p in phases]
+    eta = 0.5
+    best = solve(par, eta)
+
+    def try_set(i, j, vals):
+        nonlocal best, par
+        for v in vals:
+            tr = [list(q) for q in par]
+            tr[i][j] = v
+            ss = solve(tr, eta)
+            if ss[0] < best[0]:
+                best, par = ss, tr
+
+    for _pass in range(2):
+        for e2 in (0.2, 0.5, 0.8):
+            ss = solve(par, e2)
+            if ss[0] < best[0]:
+                best, eta = ss, e2
+        for i in range(n):
+            s0, e0, _m = par[i]
+            try_set(i, 0, [s0 + d for d in (-0.06, -0.04, -0.02, 0.02, 0.04, 0.06)])
+            s0, e0, _m = par[i]
+            try_set(i, 1, [e0 + d for d in (-0.003, -0.002, -0.001, -0.0005, 0.0005, 0.001, 0.002, 0.003)])
+            try_set(i, 2, [m for m in (0.6, 0.8, 1.0, 1.25, 1.6, 2.2, 3.0) if m != par[i][2]])
+    return [max(0.0, s) for s in best[1]]
+
+
+def rir_of(e):
+    """
+    (RIR, 下限, 上限, 結構數, 來源)。比對到的 AMCSD 記錄有自己的 RIR 時優先使用（和擬合用的相對強度一致）；
+    RRUFF 記錄沒有 RIR，改用同名礦物所有 AMCSD 結構的中位數。範圍取同名礦物的 10–90 百分位。
+    """
+    st = mindb().get("rir") or {}
+    b = base_name(e["name"])
+    for key in (e["name"].lower(), b, b.split("-")[0], b.split()[0] if b.split() else b):
+        v = st.get(key)
+        if v:
+            med, p10, p90, n = v
+            val = e.get("rir") or med
+            return val, val * p10 / med, val * p90 / med, n, "entry" if e.get("rir") else "mineral"
+    if e.get("rir"):
+        return e["rir"], e["rir"], e["rir"], 1, "entry"
+    g = fp_group_of(e)
+    if g:
+        vals = sorted(st[m][0] for m in MINERAL_GROUPS[g].split() if m in st)
+        if vals:
+            return vals[len(vals) // 2], vals[0], vals[-1], len(vals), "group"
+    return None
+
+
+def is_clay_like(e):
+    b = base_name(e["name"]).split("-")[0].split()[0] if e["name"].strip() else ""
+    g = fp_group_of(e) or ""
+    return b in CLAY_LIKE or any(k in g for k in ("kaolin", "smectite", "chlorite", "mica", "serpentine"))
+
+
+def semi_quant(phases, std_key=None, std_wt=None, seed=0):
+    """phases: [{name, key, scale, tier}] → 各礦物 wt%（中位數與 16–84 % 範圍），可選內標求非晶質含量"""
+    db = mindb()
+    rows = []
+    for p in phases:
+        e = db["by_key"][p["key"]]
+        rows.append(dict(name=p["name"], key=p["key"], src=e["src"], rid=e["rid"], tier=p.get("tier"),
+                         scale=float(p.get("scale") or 0.0), rir=rir_of(e), clay=is_clay_like(e)))
+    warn = []
+    std_i = None
+    if std_key:
+        std_i = next((i for i, r in enumerate(rows) if base_name(r["name"]).split("-")[0] == std_key), None)
+        if std_i is None:
+            warn.append("辨識結果中沒有找到內標（%s），改用「所有礦物合計 100 %%」計算。" % INTERNAL_STD[std_key][0])
+        elif not std_wt or not (0 < std_wt < 100):
+            warn.append("請輸入內標的加入量（wt%），目前改用「所有礦物合計 100 %」計算。")
+            std_i = None
+    use = [i for i, r in enumerate(rows) if r["rir"] and r["scale"] > 0]
+    if not use:
+        return dict(ok=False, why="沒有可計算的礦物（缺少 RIR 或強度）。", rows=[], warn=warn)
+    rng = np.random.default_rng(seed)
+    N = 4000
+    R0 = np.ones(len(rows))
+    R = np.ones((len(rows), N))
+    for i in use:
+        med, lo, hi, n, _src = rows[i]["rir"]
+        if std_i is not None and i == std_i and std_key == "corundum":
+            med = lo = hi = 1.0                     # 依定義
+        elif n < 3 or hi <= lo * 1.02:
+            lo, hi = med / 1.2, med * 1.2           # 結構太少時假設 ±20 %
+        R0[i] = med
+        R[i] = np.exp(rng.uniform(math.log(lo), math.log(hi), N)) if hi > lo else med
+    sc = np.array([r["scale"] for r in rows])
+    mask = np.zeros(len(rows), bool)
+    mask[use] = True
+    # 擬合強度的不確定度：以已知配比的模擬混合物測試，各礦物強度誤差約 ±5–7 %
+    Ifac = np.exp(0.07 * rng.standard_normal((len(rows), N)))
+
+    def wt(Rm):
+        if Rm.ndim == 2:
+            X = np.where(mask[:, None], sc[:, None] * Ifac / Rm, 0.0)
+        else:
+            X = np.where(mask, sc / Rm, 0.0)
+        if std_i is None:
+            return 100.0 * X / X.sum(0)
+        Wmix = std_wt * X / X[std_i]                # 混合物（含內標）中的 wt%
+        return Wmix / (1.0 - std_wt / 100.0)        # 換回原樣品
+    w0, wm = wt(R0), wt(R)
+    out = []
+    for i, r in enumerate(rows):
+        if i == std_i:
+            continue
+        d = dict(name=r["name"], key=r["key"], src=r["src"], rid=r["rid"], tier=r["tier"], clay=r["clay"],
+                 rir=None if not r["rir"] else round(R0[i], 3), rir_lo=None if not r["rir"] else r["rir"][1],
+                 rir_hi=None if not r["rir"] else r["rir"][2], rir_n=0 if not r["rir"] else r["rir"][3],
+                 rir_src=None if not r["rir"] else r["rir"][4])
+        if mask[i]:
+            v0 = float(w0[i])
+            d.update(wt=v0, lo=min(v0, float(np.percentile(wm[i], 16))), hi=max(v0, float(np.percentile(wm[i], 84))))
+        else:
+            d.update(wt=None, lo=None, hi=None)
+        out.append(d)
+    amorph = None
+    if std_i is not None:
+        keep = [i for i in use if i != std_i]
+        a0 = 100.0 - float(w0[keep].sum())
+        am = 100.0 - wm[keep].sum(0)
+        amorph = dict(wt=max(0.0, a0), lo=max(0.0, min(a0, float(np.percentile(am, 16)))),
+                      hi=max(0.0, a0, float(np.percentile(am, 84))))
+        if a0 < -5:
+            warn.append("結晶相合計超過 100 %%（%.0f %%），非晶質以 0 計；可能是 RIR 誤差或內標加入量不正確。" % (100 - a0))
+    if any(r["clay"] for r in out if r["wt"] is not None):
+        warn.append("黏土礦物與雲母的 RIR 受優選方位與層間無序影響，wt% 誤差可能很大；黏土的比例建議以定向片分析或 Rietveld 為準。")
+    if std_i is None:
+        warn.append("沒有內標：假設所有礦物都是結晶相且都已鑑定（合計 100 %）。若含非晶質或未鑑定的礦物，各礦物的 wt% 都會偏高。")
+    miss = [r["name"] for r in out if r["wt"] is None]
+    if miss:
+        warn.append("以下礦物沒有 RIR，未計入：" + "、".join(miss))
+    out.sort(key=lambda r: -(r["wt"] or -1))
+    return dict(ok=True, mode="internal" if std_i is not None else "sum100", std=std_key if std_i is not None else None,
+                std_wt=std_wt if std_i is not None else None, rows=out, amorph=amorph, warn=warn)
+
+
+RIR_REFS = {
+    "chung": "Chung, F.H., 1974. Quantitative interpretation of X-ray diffraction patterns of mixtures. I. Matrix-flushing method for quantitative multicomponent analysis. Journal of Applied Crystallography 7, 519–525.",
+    "hubbard": "Hubbard, C.R., Snyder, R.L., 1988. RIR – measurement and use in quantitative XRD. Powder Diffraction 3, 74–77.",
+    "rruff": "Lafuente, B., Downs, R.T., Yang, H., Stone, N., 2015. The power of databases: the RRUFF project. In: Armbruster, T., Danisi, R.M. (Eds.), Highlights in Mineralogical Crystallography. De Gruyter, Berlin, pp. 1–30.",
+    "amcsd": "Downs, R.T., Hall-Wallace, M., 2003. The American Mineralogist Crystal Structure Database. American Mineralogist 88, 247–250.",
+}
+
+
+def quant_methods(q, sync_wl=None):
+    p = ["Mineral phases were identified by whole-pattern fitting of calculated reference patterns from the RRUFF and "
+         "AMCSD databases (Lafuente et al., 2015; Downs and Hall-Wallace, 2003)."]
+    if sync_wl:
+        p.append("Synchrotron patterns (λ = %s Å) were converted to the 2θ scale of Cu Kα1 radiation (λ = 1.540598 Å) "
+                 "before analysis." % wl(sync_wl))
+    p.append("Semi-quantitative phase abundances were estimated with the reference intensity ratio (RIR) method "
+             "(Chung, 1974; Hubbard and Snyder, 1988) from the fitted integrated intensity of the strongest reflection "
+             "of each phase. RIR values (I/I_corundum) were taken as the median of the values calculated for all AMCSD "
+             "structures of the same mineral.")
+    if q.get("mode") == "internal":
+        std = {"corundum": "corundum (α-Al2O3)", "zincite": "zincite (ZnO)"}[q["std"]]
+        p.append("A known amount of %s (%s wt%%) was added as an internal standard, which allows the amorphous and "
+                 "unidentified fraction to be estimated as the difference from 100 wt%%." % (std, ("%g" % q["std_wt"])))
+    else:
+        p.append("The crystalline phases were assumed to sum to 100 wt%.")
+    p.append("Phase intensities were obtained by refitting the identified phases with angle-dependent peak widths and "
+             "refined lattice parameters. Reported ranges (16th–84th percentiles) combine the spread of RIR values among "
+             "structures of the same mineral with an intensity-fitting uncertainty of ±7%, and do not include "
+             "microabsorption, preferred orientation or particle-statistics effects; values for clay minerals and micas "
+             "are particularly uncertain.")
+    p.append("Data processing was carried out with XRD Studio v%s." % APP_VERSION)
+    return " ".join(p) + "\n\nReferences\n" + "\n".join(RIR_REFS[k] for k in ("chung", "amcsd", "hubbard", "rruff"))
+
+
+def quant_export(S, a):
+    q = ID_LAST.get("quant")
+    if not q or not q.get("ok"):
+        raise UserError("請先執行「自動全譜辨識」。")
+    o = io.StringIO()
+    w = csv.writer(o)
+    w.writerow(["phase", "database", "id", "tier", "wt_%", "wt_16pct", "wt_84pct", "RIR", "RIR_p10", "RIR_p90", "RIR_n_structures",
+                "clay_or_mica"])
+    for r in q["rows"]:
+        w.writerow([r["name"], {"R": "RRUFF", "A": "AMCSD"}.get(r["src"], r["src"]), r["rid"], r["tier"],
+                    _f(r["wt"], 1), _f(r["lo"], 1), _f(r["hi"], 1), _f(r["rir"], 3), _f(r["rir_lo"], 3), _f(r["rir_hi"], 3),
+                    r["rir_n"], "yes" if r["clay"] else ""])
+    if q.get("amorph"):
+        am = q["amorph"]
+        w.writerow(["amorphous + unidentified", "", "", "", _f(am["wt"], 1), _f(am["lo"], 1), _f(am["hi"], 1)])
+    files = [("semi_quantitative.csv", "﻿" + o.getvalue()), ("methods.txt", quant_methods(q, ID_LAST.get("sync_wl")))]
+    if ID_LAST.get("png"):
+        files.append(("fit.png", ID_LAST["png"]))
+    nm = safe_name(ID_LAST.get("name") or "sample", "sample")
+    return {"name": nm + "_semi_quant.zip", "mime": "application/zip"}, make_zip(files)
+
 
 def id_auto(S, items, a):
     import time as _time
@@ -2281,6 +2631,9 @@ def id_auto(S, items, a):
     x, y = x[o], y[o]
     allowed = {s for s in re.split(r"[\s,;]+", a.get("allowed") or "") if s in ELEMENTS} or None
     required = {s for s in re.split(r"[\s,;]+", a.get("required") or "") if s in ELEMENTS} or None
+    std_key = a.get("std") if a.get("std") in INTERNAL_STD else None
+    if std_key and allowed:
+        allowed |= INTERNAL_STD[std_key][1]          # 內標的元素一定要能被搜尋到
     kalpha2 = eff["type"] == "inhouse"   # 實驗室 Cu 光源有 Kα2；同步輻射為單一波長
     par = SENSITIVITY.get(a.get("sensitivity") or "high", SENSITIVITY["high"])
     res = full_identify(x, y, mindb()["e"], kalpha2, allowed, required, minerals_only=a.get("minerals_only", True),
@@ -2294,8 +2647,1139 @@ def id_auto(S, items, a):
                            uniq=p.get("uniq", 0), group=p.get("group"), po=bool(p.get("po"))))
     png = fit_png(res["fit_t"], res["fit_obs"], res["fit_calc"], res["fit_bg"],
                   [(p["name"], p["tier"], p["lines"]) for p in res["phases"]])
-    return dict(phases=phases, rwp=round(res["rwp"], 4), pool=res["pool"], kalpha2=kalpha2,
+    qp = res["phases"]
+    if qp:
+        sc = quant_refit(x, y, kalpha2, qp)
+        qp = [dict(p, scale=s) for p, s in zip(qp, sc)]
+    quant = semi_quant(qp, std_key, fnum(a.get("std_wt")))
+    ID_LAST.clear()
+    ID_LAST.update(quant=quant, png=png, name=d0.get("base") or d0["name"],
+                   sync_wl=eff["src"] if eff["type"] != "inhouse" and eff["convert"] else None)
+    if quant.get("ok"):
+        quant["methods"] = quant_methods(quant, ID_LAST["sync_wl"])
+    return dict(phases=phases, rwp=round(res["rwp"], 4), pool=res["pool"], kalpha2=kalpha2, quant=quant,
                 secs=round(_time.time() - t0, 1)), png
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 14. 定量（Rietveld）：匯出給 Profex / GSAS-II 的檔案，以及把精修結果畫成期刊格式的 Rietveld 圖
+# ═════════════════════════════════════════════════════════════════════════════
+RV = {}   # 目前載入的精修結果
+
+
+def _amcsd_for(name):
+    """同名礦物在資料庫中的 AMCSD 記錄（Rietveld 需要晶體結構，RRUFF 峰表沒有原子座標）"""
+    es = [e for e in lookup(name) if e["src"] == "A"]
+    return es[0] if es else None
+
+
+def rietveld_package(S, items, a):
+    iid = a.get("id")
+    if iid not in DATA:
+        raise UserError("請先選擇要精修的曲線。")
+    d0 = DATA[iid]
+    eff = effective(d0, S)
+    # 原始波長的數據（不做換算）：同步輻射用該次 beamtime 的波長；已換算的檔案只能以 Cu Kα1 輸出
+    lam = eff["src"]
+    x, y = d0["x"].astype(float), d0["y"].astype(float)
+    esd = None
+    if d0["rows"] and len(d0["rows"][0]) >= 3:
+        try:
+            esd = np.array([float(r[2]) for r in d0["rows"]])
+        except (ValueError, IndexError):
+            esd = None
+    if esd is None or not np.all(np.isfinite(esd)) or np.all(esd <= 0):
+        esd = np.sqrt(np.maximum(y, 1.0))
+    base = safe_name(d0.get("base") or os.path.splitext(d0["name"])[0], "data")
+    conv_note = ""
+    if eff["type"] == "sync_conv":
+        conv_note = "（這個檔案已換算成 Cu Kα1 的 2θ；強度沒有換算，精修時請以 λ = 1.540598 Å、無 Kα2 設定）"
+    xye = io.StringIO()
+    xye.write("/* %s — wavelength %s A — exported by XRD Studio v%s */\n" % (d0["name"], wl(lam), APP_VERSION))
+    for xi, yi, ei in zip(x, y, esd):
+        xye.write("%.5f %.4f %.4f\n" % (xi, yi, ei))
+    names = [str(n).strip() for n in (a.get("phases") or []) if str(n).strip()]
+    q = ID_LAST.get("quant") or {}
+    qwt = {r["name"]: r for r in q.get("rows", [])} if q.get("ok") else {}
+    rows = io.StringIO()
+    w = csv.writer(rows)
+    w.writerow(["phase", "AMCSD_code_for_CIF", "approx_wt%_RIR", "note"])
+    for n in names:
+        e = _amcsd_for(n)
+        r = qwt.get(n)
+        w.writerow([n, e["rid"] if e else "", _f(r["wt"], 1) if r and r.get("wt") is not None else "",
+                    ("clay/mica: use a disordered structure model if available" if r and r.get("clay") else "")])
+    src_txt = ("同步輻射，波長 %s Å（請確認與該次 beamtime 相同）" % wl(lam)) if eff["type"] == "sync_raw" else \
+              ("實驗室 Cu Kα（Kα1 = 1.540598、Kα2 = 1.544426 Å）" if eff["type"] == "inhouse" else "已換算為 Cu Kα1")
+    readme = """XRD Studio → Rietveld 精修（Profex / GSAS-II）
+=========================================
+
+數據：%(base)s.xye
+  光源：%(src)s%(conv)s
+  欄位：2θ、強度、誤差（原始檔沒有誤差欄時以 √強度 代替）。2θ 為原始波長，沒有換算。
+
+礦物：phases.csv（自動全譜辨識的結果；approx_wt%%_RIR 只是 RIR 半定量的估計，可當起始值參考）
+
+建議流程（Profex，免費：https://www.profex-xrd.org）
+1. 儀器設定：
+   - 實驗室繞射儀：選擇和你的儀器相符的設定檔（狹縫、測角儀半徑、是否有單色器）。
+   - 同步輻射：用「同一次 beamtime、同樣架設」量的 LaB6 或 CeO2 標準品圖譜建立儀器峰形，
+     並設定波長 %(wl)s Å、偏振（同步輻射為線偏振）。沒有標準品就無法正確描述儀器峰形。
+2. File → Open 開啟 %(base)s.xye。
+3. 加入礦物：優先使用 Profex 內建的結構檔（黏土礦物有專用的無序結構模型）；
+   沒有的礦物，到 AMCSD（https://rruff.geo.arizona.edu/AMS/amcsd.php）用 phases.csv 的編號下載 CIF，
+   再用 Profex 的「Import CIF」轉成結構檔。
+4. 精修後匯出結果：
+   - Profex：精修結果的 .dia 檔（與 .par 同資料夾）即可直接載入 XRD Studio 畫 Rietveld 圖。
+   - GSAS-II：Export → Powder data as → CSV file（再加上 Reflection list as CSV 可得精確的峰位刻度）。
+5. 論文中請寫明：精修軟體與版本、各礦物使用的結構來源（AMCSD 編號或 Profex 結構檔名稱）、Rwp 與 GOF、
+   是否使用內標，以及 wt%% 的誤差（精修給的 ESD 通常低估真實誤差）。
+""" % dict(base=base, src=src_txt, conv=conv_note, wl=wl(lam))
+    files = [(base + ".xye", xye.getvalue()), ("phases.csv", "﻿" + rows.getvalue()), ("README_Rietveld.txt", readme)]
+    return {"name": base + "_for_Rietveld.zip", "mime": "application/zip"}, make_zip(files)
+
+
+_RV_NAMES = {"obs": ("y_obs", "yobs", "obs", "iobs", "observed", "intensity", "i_obs"),
+             "calc": ("y_calc", "ycalc", "calc", "icalc", "calculated", "i_calc", "ycal"),
+             "bkg": ("y_bkg", "ybkg", "bkg", "background", "ibkg", "back", "backg", "i_bkg"),
+             "skip": ("weight", "obs-calc", "diff", "difference", "esd", "sigma", "y_diff", "yobs-ycal")}
+
+
+def _rv_tokens(s):
+    s = s.strip()
+    parts = s.split(",") if "," in s else re.split(r"[\t;]|\s+", s)
+    return [t.strip().strip('"').strip("'").strip() for t in parts if t.strip().strip('"').strip("'").strip()]
+
+
+def read_refined(name, text):
+    """讀精修結果：GSAS-II 的粉末 CSV / 反射列表 CSV、Profex(BGMN) .dia，或任何「2θ、觀測、計算[、背景、各相]」的欄位檔"""
+    lines = text.splitlines()
+    low = text.lower()
+    if '"h","k","l"' in low.replace(" ", "") or re.search(r"^\s*h\s*,\s*k\s*,\s*l\s*,", low, re.M):
+        # GSAS-II 反射列表
+        phases, refl, cols = {}, {}, None
+        for ln in lines:
+            t = _rv_tokens(ln)
+            if not t:
+                continue
+            tl = [v.lower() for v in t]
+            if tl[:3] == ["h", "k", "l"]:
+                cols = tl
+                continue
+            if cols is None:
+                if len(t) == 2 and _isnum(t[1]) and not _isnum(t[0]):
+                    phases[int(float(t[1]))] = t[0]
+                continue
+            if len(t) == len(cols) and all(_isnum(v) for v in t):
+                pos_i = next((i for i, c in enumerate(cols) if c in ("2-theta", "2theta", "2θ", "pos")), 3)
+                ph = int(float(t[cols.index("phase #")])) if "phase #" in cols else 0
+                refl.setdefault(ph, []).append(float(t[pos_i]))
+        if not refl:
+            raise UserError("%s：看起來是反射列表，但讀不到峰位。" % name)
+        return dict(kind="refl", refl={phases.get(k, "Phase %d" % (k + 1)): sorted(v) for k, v in refl.items()})
+    header, rows = None, []
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith(("//", "#", "/*")) and not rows:
+            if s.startswith(("//", "#")) and not rows:
+                hdr = _rv_tokens(s.lstrip("/#").strip())
+                if len(hdr) >= 3:
+                    header = hdr
+            continue
+        t = _rv_tokens(s)
+        if len(t) >= 3 and _isnum(t[0]) and _isnum(t[1]):
+            rows.append([float(v) if _isnum(v) else float("nan") for v in t])
+        elif not rows and len(t) >= 3:
+            header = t
+    if len(rows) < 20:
+        raise UserError("%s：讀不到精修結果的數據欄（至少要有 2θ、觀測、計算三欄）。" % name)
+    from collections import Counter
+    ncol = Counter(len(r) for r in rows).most_common(1)[0][0]
+    arr = np.array([r for r in rows if len(r) == ncol], float)
+    names = [h.lower() for h in header] if header and len(header) == ncol else None
+    roles = {}
+    if names:
+        for i, nm in enumerate(names[1:], 1):
+            for role in ("obs", "calc", "bkg"):
+                if nm in _RV_NAMES[role] and role not in roles:
+                    roles[role] = i
+                    break
+    if "obs" not in roles or "calc" not in roles:
+        roles = {"obs": 1, "calc": 2}
+        if ncol >= 4:
+            roles["bkg"] = 3
+    used = set(roles.values()) | {i for i, nm in enumerate(names or []) if nm in _RV_NAMES["skip"]}
+    extra = [i for i in range(1, ncol) if i not in used]
+    cols = [dict(i=i, name=(header[i] if names else "第 %d 欄" % (i + 1))) for i in range(ncol)]
+    return dict(kind="pattern", name=name, arr=arr, roles=roles, extra=extra, cols=cols)
+
+
+def _rv_ticks(R, phases, lam):
+    """各礦物的峰位刻度：有反射列表就用它；否則用資料庫峰表，並把晶格微調到和計算圖譜的峰對齊"""
+    arr, ro = R["arr"], R["roles"]
+    x = arr[:, 0]
+    calc = arr[:, ro["calc"]] - (arr[:, ro["bkg"]] if "bkg" in ro else np.min(arr[:, ro["calc"]]))
+    calc = np.clip(calc, 0, None)
+    refl = RV.get("refl") or {}
+    out = []
+    for ph in phases:
+        nm = ph["name"]
+        hit = next((v for k, v in refl.items() if base_name(k) == base_name(nm) or k.lower() == nm.lower()), None)
+        if hit:
+            pos = np.array([t for t in hit if x[0] <= t <= x[-1]])
+            out.append(dict(ph, pos=pos, src="refl"))
+            continue
+        es = lookup(nm)
+        if not es:
+            out.append(dict(ph, pos=np.array([]), src="none"))
+            continue
+        e = next((e for e in es if e["src"] == "A"), es[0])
+        m = e["I"] >= 2
+        d, I = e["d"][m], e["I"][m]
+        best = (-1.0, 0.0)
+        for eps in np.arange(-0.015, 0.01501, 0.0005):
+            sn = lam / (2 * d * (1 + eps))
+            ok = sn < 1
+            t = 2 * np.degrees(np.arcsin(sn[ok]))
+            v = float((np.interp(t, x, calc, left=0, right=0) * I[ok]).sum())
+            if v > best[0]:
+                best = (v, eps)
+        sn = lam / (2 * d * (1 + best[1]))
+        ok = sn < 1
+        t = 2 * np.degrees(np.arcsin(sn[ok]))
+        out.append(dict(ph, pos=np.sort(t[(t >= x[0]) & (t <= x[-1])]), src="db"))
+    return out
+
+
+def rietveld_figure(S, opts, fmt="png", dpi=300, preview=False):
+    R = RV.get("pattern")
+    if not R:
+        raise UserError("請先載入精修結果。")
+    S = merge_settings(S or {})
+    arr, ro = R["arr"], dict(R["roles"])
+    for k in ("obs", "calc", "bkg"):
+        v = opts.get("col_" + k)
+        if v is not None and v != "":
+            if int(v) < 0:
+                ro.pop(k, None)
+            else:
+                ro[k] = int(v)
+    if "obs" not in ro or "calc" not in ro:
+        raise UserError("請指定觀測與計算強度的欄位。")
+    R2 = dict(R, roles=ro)
+    x, yo, yc = arr[:, 0], arr[:, ro["obs"]], arr[:, ro["calc"]]
+    yb = arr[:, ro["bkg"]] if "bkg" in ro else None
+    x0 = fnum(opts.get("xmin"), float(x.min()))
+    x1 = fnum(opts.get("xmax"), float(x.max()))
+    m = (x >= x0) & (x <= x1)
+    x, yo, yc = x[m], yo[m], yc[m]
+    yb = yb[m] if yb is not None else None
+    lam = fnum(opts.get("wl"), TAG_WL)
+    phases = [p for p in (opts.get("phases") or []) if p.get("name")]
+    ticks_all = _rv_ticks(dict(R2, arr=arr[m]), phases, lam)
+    ticks = [t for t in ticks_all if t["src"] != "none"]
+    diff = yo - yc
+    top, bot = float(max(yo.max(), yc.max())), float(min(yo.min(), yc.min()))
+    rng_ = top - bot or 1.0
+    nt = len(ticks)
+    gap = 0.045 * rng_
+    tick_top = bot - 0.05 * rng_
+    tick_bot = tick_top - nt * gap
+    dmax = float(np.percentile(np.abs(diff), 99.8)) or 1.0
+    d0 = tick_bot - 0.04 * rng_ - dmax
+    W = S["width_mm"] / 25.4
+    H = S["height_mm"] / 25.4
+    with matplotlib.rc_context(make_rc(S)):
+        fig = Figure(figsize=(W, H), dpi=dpi)
+        FigureCanvasAgg(fig)
+        ax = fig.add_subplot(111)
+        lw = S["lw"]
+        ms = max(1.0, 2.2 * lw)
+        step = max(1, len(x) // 2500)
+        ax.plot(x[::step], yo[::step], ls="none", marker="o", ms=ms, mfc="none", mec="black", mew=0.35 * lw / 0.75,
+                label="Observed", zorder=2)
+        ax.plot(x, yc, color="#D62728", lw=lw, label="Calculated", zorder=3)
+        if yb is not None and opts.get("show_bkg", True):
+            ax.plot(x, yb, color="#8e8e93", lw=lw * 0.7, label="Background", zorder=1)
+        ax.plot(x, diff + d0, color="#1F5FAD", lw=lw * 0.8, label="Difference", zorder=3)
+        for i, tk in enumerate(ticks):
+            yy = tick_top - (i + 0.5) * gap
+            c = TICK_COLORS[i % len(TICK_COLORS)]
+            if len(tk["pos"]):
+                ax.vlines(tk["pos"], yy - 0.36 * gap, yy + 0.36 * gap, color=c, lw=lw * 0.6, zorder=2)
+            lab = tk["name"]
+            if tk.get("wt") not in (None, ""):
+                lab += "  %s wt%%" % tk["wt"] + (" (± %s)" % tk["err"] if tk.get("err") not in (None, "") else "")
+            ax.text(1.005, yy, lab, transform=blended_transform_factory(ax.transAxes, ax.transData), ha="left",
+                    va="center", fontsize=S["fs_legend"], color=c, clip_on=False)
+        ax.set_xlim(x0, x1)
+        ax.set_ylim(d0 - dmax * 1.3, top + 0.06 * rng_)
+        ax.set_yticks([])
+        ax.set_xlabel(fmt_label(opts.get("xlabel") or "2θ (°)", S), fontsize=S["fs_label"])
+        ax.set_ylabel("Intensity (a.u.)", fontsize=S["fs_label"])
+        ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(2))
+        stats = []
+        if opts.get("rwp") not in (None, ""):
+            stats.append("$R_{wp}$ = %s%%" % opts["rwp"])
+        if opts.get("gof") not in (None, ""):
+            stats.append("GOF = %s" % opts["gof"])
+        if opts.get("show_wl", True):
+            stats.append("λ = %s Å" % wl(lam))
+        if stats:
+            ax.text(0.015, 0.97, "\n".join(stats), transform=ax.transAxes, ha="left", va="top", fontsize=S["fs_legend"])
+        ax.legend(loc="upper right", frameon=False, fontsize=S["fs_legend"], handlelength=1.4, markerscale=1.6)
+        buf = io.BytesIO()
+        kw = dict(format=fmt, dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=0.03)
+        try:
+            fig.savefig(buf, **(dict(kw, pil_kwargs={"compression": "tiff_lzw"}) if fmt == "tiff" else kw))
+        except Exception:      # 舊版 Pillow 不支援 LZW
+            buf = io.BytesIO()
+            fig.savefig(buf, **kw)
+    miss = [t["name"] for t in ticks_all if t["src"] == "none"]
+    return buf.getvalue(), dict(ticks=[dict(name=t["name"], n=int(len(t["pos"])), src=t["src"]) for t in ticks_all], missing=miss)
+
+
+def rv_load(a):
+    out = []
+    for f in a.get("files") or []:
+        r = read_refined(str(f.get("name") or "result"), str(f.get("text") or ""))
+        if r["kind"] == "refl":
+            RV["refl"] = r["refl"]
+            out.append(dict(name=f.get("name"), kind="refl", phases=list(r["refl"].keys())))
+        else:
+            RV["pattern"] = r
+            out.append(dict(name=f.get("name"), kind="pattern", cols=r["cols"], roles=r["roles"], extra=r["extra"],
+                            n=int(len(r["arr"])), xr=[float(r["arr"][:, 0].min()), float(r["arr"][:, 0].max())]))
+    return dict(loaded=out, has_pattern="pattern" in RV, refl_phases=list((RV.get("refl") or {}).keys()))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 13. 黏土礦物（定向片：AD 風乾 / EG 乙二醇 / 加熱 / 甲醯胺）
+#     底面反射峰擬合 → 依處理前後的 d 值變化判讀 → Biscaye (1965) 半定量 → Kübler / Esquevin 指標
+# ═════════════════════════════════════════════════════════════════════════════
+CLAY_ORDER = ["AD", "EG", "H350", "H550", "FA"]
+CLAY_TREAT_ZH = {"AD": "AD 風乾", "EG": "EG 乙二醇", "H350": "加熱 350 °C", "H550": "加熱 550 °C", "FA": "甲醯胺 FA"}
+CLAY_TREAT_FIG = {"AD": "AD", "EG": "EG", "H350": "350 °C", "H550": "550 °C", "FA": "FA"}
+CLAY_TREAT_EN = {"AD": "air-dried (AD)", "EG": "after ethylene-glycol solvation (EG)", "H350": "after heating to 350 °C",
+                 "H550": "after heating to 550 °C", "FA": "after formamide treatment"}
+CLAY_LAST = {}   # 最近一次分析結果（下載圖檔、CSV 用）
+
+
+def _t_of_d(d):
+    return 2.0 * math.degrees(math.asin(min(1.0, TAG_WL / (2.0 * d))))
+
+
+def _d_of_t(t):
+    return TAG_WL / (2.0 * math.sin(math.radians(t / 2.0)))
+
+
+def _cc(key, dlo, dhi, wlo, whi, d0, w0, tie=None):
+    """一個要擬合的峰：d 值範圍（Å）、半高寬範圍（°2θ, Cu Kα）、初始值；tie = 與另一個峰共用半高寬"""
+    return dict(key=key, dlo=dlo, dhi=dhi, wlo=wlo, whi=whi, d0=d0, w0=w0, tie=tie)
+
+
+_W7 = dict(name="7A", t=(11.0, 13.8), bg=1, comps=[_cc("K7", 6.95, 7.5, 0.06, 1.2, 7.15, 0.3),
+                                                     _cc("K7x", 6.95, 7.5, 0.45, 2.2, 7.25, 1.0)])
+_W5 = dict(name="5A", t=(16.4, 19.6), bg=1, comps=[_cc("I5", 4.93, 5.06, 0.06, 1.2, 4.99, 0.3),
+                                                     _cc("C47", 4.68, 4.80, 0.06, 1.0, 4.73, 0.3)])
+_W35 = dict(name="35A", t=(24.45, 25.65), bg=1, comps=[_cc("K358", 3.565, 3.61, 0.05, 0.9, 3.58, 0.25),
+                                                         _cc("C354", 3.52, 3.56, 0.05, 0.9, 3.54, 0.25, tie="K358")])
+CLAY_WINDOWS = {
+    "EG": [dict(name="low", t=(2.5, 10.7), bg=2, comps=[
+        _cc("S17", 15.6, 18.2, 0.25, 2.6, 16.9, 0.8), _cc("ML", 10.6, 15.4, 0.6, 3.5, 12.5, 1.6),
+        _cc("C14", 13.6, 14.8, 0.08, 1.0, 14.2, 0.3), _cc("I10", 9.7, 10.4, 0.06, 1.3, 10.0, 0.3)]), _W7, _W5, _W35],
+    "AD": [dict(name="low", t=(2.5, 10.7), bg=2, comps=[
+        _cc("E14", 11.5, 15.8, 0.3, 2.6, 14.5, 1.0), _cc("C14", 13.6, 14.8, 0.08, 1.0, 14.2, 0.3),
+        _cc("I10", 9.7, 10.4, 0.06, 1.3, 10.0, 0.3)]), _W7, _W5, _W35],
+    "H550": [dict(name="low", t=(2.5, 10.7), bg=2, comps=[
+        _cc("C14", 13.4, 14.6, 0.08, 1.2, 14.0, 0.3), _cc("I10", 9.6, 10.6, 0.06, 2.2, 10.0, 0.4)]), _W7, _W5, _W35],
+    "FA": [dict(name="low", t=(2.5, 10.7), bg=2, comps=[
+        _cc("C14", 13.6, 14.8, 0.08, 1.0, 14.2, 0.3), _cc("H10", 10.15, 10.9, 0.1, 1.5, 10.4, 0.5),
+        _cc("I10", 9.7, 10.15, 0.06, 1.0, 10.0, 0.3)]), _W7, _W5, _W35],
+}
+CLAY_WINDOWS["H350"] = CLAY_WINDOWS["H550"]
+
+# 礦物縮寫依 IMA–CNMNC 建議（Warr, 2021）：Sme 膨潤石、Ilt 伊萊石、Kln 高嶺石、Chl 綠泥石、Vrm 蛭石、Hly 埃洛石、Qz 石英
+CLAY_ABBR = {"S17": "Sme", "E14": "Sme/Vrm", "ML": "I/S", "I10": "Ilt", "I5": "Ilt", "C14": "Chl", "C47": "Chl", "C354": "Chl",
+             "K7": "Kln+Chl", "K7x": "Kln+Chl", "K358": "Kln", "H10": "Hly"}
+CLAY_COL = {"S17": "#E69F00", "E14": "#E69F00", "ML": "#D55E00", "I10": "#0072B2", "I5": "#0072B2", "C14": "#CC79A7",
+            "C47": "#CC79A7", "C354": "#CC79A7", "K7": "#009E73", "K7x": "#009E73", "K358": "#009E73", "H10": "#8C564B"}
+BISCAYE_COL = {"Smectite": "#E69F00", "Illite": "#0072B2", "Kaolinite": "#009E73", "Chlorite": "#CC79A7"}
+
+
+def _pv_unit(x, c, w, eta):
+    """面積 = 1 的 pseudo-Voigt（x、c、w 皆為 °2θ）"""
+    z = (x - c) / w
+    return (eta * (0.6366197723675814 / w) / (1.0 + 4.0 * z * z)
+            + (1.0 - eta) * (0.9394372786996513 / w) * np.exp(-2.772588722239781 * z * z))
+
+
+def _pv_ka(x, c, w, eta, ka2):
+    """面積 = 1 的峰形；實驗室 Cu 光源（ka2=True）時為 Kα1 + ½ Kα2 雙峰，c 為 Kα1 的位置"""
+    if not ka2:
+        return _pv_unit(x, c, w, eta)
+    c2 = 2.0 * math.degrees(math.asin(min(1.0, 1.544426 / TAG_WL * math.sin(math.radians(c / 2.0)))))
+    return (_pv_unit(x, c, w, eta) + 0.5 * _pv_unit(x, c2, w, eta)) / 1.5
+
+
+def _lsq_peaks_bg(D, y, k):
+    """y ≈ D θ；前 k 個係數（峰面積）≥ 0，其餘（背景修正）不限"""
+    cols = list(range(D.shape[1]))
+    while True:
+        th = np.linalg.lstsq(D[:, cols], y, rcond=None)[0]
+        neg = [j for j, c in enumerate(cols) if c < k and th[j] < 0]
+        if not neg:
+            full = np.zeros(D.shape[1])
+            full[cols] = th
+            return full
+        cols.pop(min(neg, key=lambda j: th[j]))
+
+
+def _fit_window(x, yb, comps, bgdeg, ka2=False):
+    """
+    一個區間內的多峰擬合（Levenberg–Marquardt，峰面積與背景修正以線性最小平方直接求解）。
+    回傳每個峰的中心、半高寬、面積與面積的標準差（由擬合的共變異矩陣估計）。
+    """
+    k = len(comps)
+    xm, xs = float(x.mean()), max(float(x.max() - x.min()) / 2.0, 1e-6)
+    Bg = np.stack([((x - xm) / xs) ** p for p in range(bgdeg + 1)], 1)
+    free_w = [c["key"] for c in comps if not c.get("tie")]
+    lo = [_t_of_d(c["dhi"]) for c in comps] + [next(c for c in comps if c["key"] == f)["wlo"] for f in free_w] + [0.0]
+    hi = [_t_of_d(c["dlo"]) for c in comps] + [next(c for c in comps if c["key"] == f)["whi"] for f in free_w] + [1.0]
+    lo, hi = np.array(lo), np.array(hi)
+
+    def unpack(v):
+        ws = dict(zip(free_w, v[k:k + len(free_w)]))
+        return v[:k], np.array([ws[c["tie"] or c["key"]] for c in comps]), float(v[-1])
+
+    def design(v):
+        cen, wid, eta = unpack(v)
+        return np.hstack([np.stack([_pv_ka(x, cen[i], wid[i], eta, ka2) for i in range(k)], 1), Bg])
+
+    def tov(z):
+        return lo + (hi - lo) * (1.0 + np.tanh(z)) / 2.0
+
+    def toz(v):
+        f = np.clip((np.asarray(v, float) - lo) / (hi - lo), 1e-6, 1 - 1e-6)
+        return np.arctanh(2.0 * f - 1.0)
+
+    def resid(z):
+        D = design(tov(z))
+        th = _lsq_peaks_bg(D, yb, k)
+        return yb - D @ th, th
+
+    # 初始值：窄峰取區間內實際的最高點，寬峰用典型位置；另外試一組較寬的初始半高寬
+    sm = np.convolve(yb, np.ones(5) / 5, mode="same") if len(yb) > 7 else yb
+    cen0 = []
+    for i, c in enumerate(comps):
+        a, b = lo[i], hi[i]
+        m = (x >= a) & (x <= b)
+        if c["whi"] <= 1.3 and m.sum() >= 3:
+            j = int(np.argmax(np.where(m, sm, -np.inf)))
+            cen0.append(x[j] if 0 < j < len(x) - 1 and sm[j] > 0 else _t_of_d(c["d0"]))
+        else:
+            cen0.append(_t_of_d(c["d0"]))
+    starts = []
+    for f in (1.0, 1.7):
+        w0 = [next(c for c in comps if c["key"] == fw)["w0"] * f for fw in free_w]
+        starts.append(np.array(cen0 + w0 + [0.5]))
+    best = None
+    for v0 in starts:
+        z = toz(np.clip(v0, lo + 1e-9, hi - 1e-9))
+        r, th = resid(z)
+        ssr, lam = float(r @ r), 1e-2
+        for _it in range(80):
+            J = np.empty((len(x), len(z)))
+            for j in range(len(z)):
+                dz = np.zeros(len(z))
+                dz[j] = 1e-4
+                J[:, j] = (resid(z + dz)[0] - r) / 1e-4
+            g, H = J.T @ r, J.T @ J
+            improved, rel = False, 0.0
+            for _ in range(10):
+                try:
+                    stp = np.linalg.solve(H + lam * np.diag(np.diag(H) + 1e-12), -g)
+                except np.linalg.LinAlgError:
+                    lam *= 4
+                    continue
+                r2, th2 = resid(z + stp)
+                s2 = float(r2 @ r2)
+                if s2 < ssr:
+                    rel = (ssr - s2) / max(ssr, 1e-300)
+                    z, r, th, ssr = z + stp, r2, th2, s2
+                    lam = max(lam / 3.0, 1e-7)
+                    improved = True
+                    break
+                lam *= 4
+            if not improved or rel < 1e-8:
+                break
+        if best is None or ssr < best[0]:
+            best = (ssr, z, th, r)
+    ssr, z, th, r = best
+    v = tov(z)
+    cen, wid, eta = unpack(v)
+    # 共變異矩陣：模型對所有參數（中心、半高寬、η、面積、背景）的 Jacobian
+    D = design(v)
+    act = [i for i in range(k) if th[i] > 0] + list(range(k, D.shape[1]))
+    cols = [D[:, i] for i in act]
+    for j in range(len(v)):
+        h = (hi[j] - lo[j]) * 1e-5
+        v2 = v.copy()
+        v2[j] = v[j] + h
+        cols.append(((design(v2) - D) @ th) / h)
+    Jf = np.stack(cols, 1)
+    n, p = len(x), Jf.shape[1]
+    s2 = ssr / max(n - p, 1)
+    try:
+        cov = np.linalg.pinv(Jf.T @ Jf) * s2
+    except np.linalg.LinAlgError:
+        cov = np.full((p, p), np.nan)
+    sd_area = np.zeros(k)
+    for pos, i in enumerate(act):
+        if i < k:
+            sd_area[i] = math.sqrt(max(cov[pos, pos], 0.0))
+    out = []
+    for i, c in enumerate(comps):
+        out.append(dict(key=c["key"], t=float(cen[i]), d=float(_d_of_t(cen[i])), fwhm=float(wid[i]), eta=eta,
+                        area=float(th[i]), sd=float(sd_area[i]),
+                        height=float(th[i] * _pv_ka(np.array([cen[i]]), cen[i], wid[i], eta, ka2)[0])))
+    return dict(comps=out, bgc=th[k:], xm=xm, xs=xs, deg=bgdeg, sigma=math.sqrt(s2), ssr=ssr, ka2=ka2)
+
+
+def clay_fit_pattern(x, y, treat, ka2=False):
+    """擬合一條定向片圖譜（x 為 Cu Kα1 的 2θ；ka2 = 實驗室 Cu 光源含 Kα2）。"""
+    o = np.argsort(x)
+    x, y = np.asarray(x, float)[o], np.asarray(y, float)[o]
+    m = (x >= 1.0) & (x <= 34.0) & np.isfinite(y)
+    x, y = x[m], y[m]
+    if len(x) < 50 or x[-1] - x[0] < 5:
+        raise UserError("數據點太少或 2θ 範圍太窄，無法分析黏土礦物（需要約 3–30° 2θ，Cu Kα）。")
+    step = max(float(np.median(np.diff(x))), 1e-4)
+    xg = np.arange(x[0], x[-1] + step / 2, step)
+    yg = np.interp(xg, x, y)
+    bg = snip_background(yg, max(3, int(round(2.5 / step))))
+    yb = yg - bg
+    noise = 1.4826 * float(np.median(np.abs(np.diff(yb)))) / math.sqrt(2) or 1e-12
+    comps, wins, oor = {}, [], []
+    for W in CLAY_WINDOWS[treat]:
+        a, b = W["t"]
+        a2, b2 = max(a, xg[0] + 0.15), min(b, xg[-1] - 0.1)
+        # 峰的兩側要有足夠的數據（約 1 個半高寬，最多 1°）才能定出背景；不足的峰標為「超出範圍」
+        cover = [c for c in W["comps"] if _t_of_d(c["d0"]) - min(1.0, c["w0"]) >= a2
+                 and _t_of_d(c["d0"]) + min(1.0, c["w0"]) <= b2]
+        cover = [c if not c.get("tie") or any(cc["key"] == c["tie"] for cc in cover) else dict(c, tie=None) for c in cover]
+        oor += [c["key"] for c in W["comps"] if c not in cover and c["key"] not in [cc["key"] for cc in cover]]
+        keys = [c["key"] for c in cover]
+        if not cover or b2 - a2 < 0.4 * (b - a):
+            oor += keys
+            continue
+        mk = (xg >= a2) & (xg <= b2)
+        xw, yw = xg[mk], yb[mk]
+        use = list(cover)
+
+        def weak_of(res):
+            w = [c["key"] for c in res["comps"]
+                 if c["area"] <= 0 or c["area"] < 3.0 * c["sd"] or c["height"] < 3.0 * max(noise, res["sigma"] * 0.7)]
+            # 共用半高寬的峰：被依附的峰若還在就保留
+            return [kk for kk in w if not any(cc.get("tie") == kk and cc["key"] not in w for cc in use)]
+
+        res = None
+        for _round in range(3):
+            res = _fit_window(xw, yw, use, W["bg"], ka2)
+            weak = weak_of(res)
+            if not weak:
+                break
+            use = [c if c.get("tie") not in weak else dict(c, tie=None) for c in use if c["key"] not in weak]
+            if not use:
+                res = None
+                break
+        if res is not None and weak_of(res):
+            weak = weak_of(res)
+            use = [c if c.get("tie") not in weak else dict(c, tie=None) for c in use if c["key"] not in weak]
+            res = _fit_window(xw, yw, use, W["bg"], ka2) if use else None
+        got = {c["key"]: c for c in res["comps"]} if res else {}
+        for kk in keys:
+            c = got.get(kk)
+            if c is None:
+                comps[kk] = dict(key=kk, present=False, area=0.0, sd=0.0, d=None, t=None, fwhm=None, height=0.0)
+            else:
+                c = dict(c)
+                c["present"] = bool(c["area"] > 3.0 * c["sd"] and c["height"] > 3.0 * max(noise, res["sigma"] * 0.7))
+                comps[kk] = c
+        if res:
+            wins.append(dict(name=W["name"], a=float(a2), b=float(b2), res=res, keys=[c["key"] for c in use]))
+    for kk in oor:
+        comps[kk] = dict(key=kk, present=False, area=0.0, sd=0.0, d=None, t=None, fwhm=None, height=0.0, oor=True)
+    # 寬峰（膨潤石、混層）卡在參數邊界時，代表擬合的是背景彎曲而不是峰
+    for key in ("S17", "E14", "ML", "I10"):
+        c = comps.get(key)
+        if c and c.get("present"):
+            spec = next(cc for W in CLAY_WINDOWS[treat] for cc in W["comps"] if cc["key"] == key)
+            if c["fwhm"] >= 0.97 * spec["whi"] or c["d"] <= spec["dlo"] * 1.005 or c["d"] >= spec["dhi"] * 0.995:
+                c["present"] = False
+    # 混層寬峰：容易和背景的彎曲混淆，必須至少是 17 Å 或 10 Å 峰的 1/4 才算
+    ml = comps.get("ML")
+    if ml and ml.get("present"):
+        ref = max(comps.get("S17", {}).get("area", 0.0), comps.get("I10", {}).get("area", 0.0))
+        ml["present"] = ml["area"] >= 0.25 * ref
+    # 石英 3.34 Å 峰高 ÷ 最強的黏土底面峰高：遠大於 1 表示是全岩隨機粉末，不是黏土定向片
+    tq = _t_of_d(3.343)
+    mq = (xg > tq - 0.15) & (xg < tq + 0.15)
+    hq = float(yb[mq].max()) if mq.any() else 0.0
+    hc = max([c["height"] for k2, c in comps.items() if c.get("present") and k2 in ("S17", "E14", "ML", "C14", "I10", "K7")] or [0.0])
+    qz_ratio = hq / hc if hc > 0 else (float("inf") if hq > 10 * noise else 0.0)
+    return dict(treat=treat, x=xg, y=yg, bg=bg, noise=noise, comps=comps, wins=wins, ka2=ka2, qz_ratio=qz_ratio)
+
+
+def _cp(fit, key):
+    if not fit:
+        return None
+    c = fit["comps"].get(key)
+    return c if c and c.get("present") else None
+
+
+def _oor(fit, key):
+    return bool(fit and fit["comps"].get(key, {}).get("oor"))
+
+
+def clay_interpret(F):
+    """依各處理的峰位變化判讀黏土礦物。F = {處理: 擬合結果}；回傳 [{zh, en, tier, why}]、注意事項"""
+    EG, AD, H5, H3, FA = (F.get(k) for k in ("EG", "AD", "H550", "H350", "FA"))
+    H = H5 or H3
+    out, notes = [], []
+
+    def add(key, zh, en, tier, why):
+        out.append(dict(key=key, zh=zh, en=en, tier=tier, why=why))
+
+    # 膨潤石（smectite）與混層
+    s17, ml, e14 = _cp(EG, "S17"), _cp(EG, "ML"), _cp(AD, "E14")
+    if s17:
+        why = "EG %.1f Å" % s17["d"]
+        if e14:
+            why = "AD %.1f Å → %s（乙二醇處理後膨脹）" % (e14["d"], why)
+        else:
+            why += "（膨脹到約 17 Å 是膨潤石的特徵）"
+        tier = "certain"
+        if s17["d"] < 16.4:
+            tier = "possible"
+            why += "；膨脹不完全，可能是伊萊石/膨潤石混層或層間陽離子影響"
+        hi10, ei10 = _cp(H, "I10"), _cp(EG, "I10")
+        if H and hi10 and ei10 and hi10["area"] > 1.3 * ei10["area"]:
+            why += "；加熱後塌陷到 10 Å"
+        add("smectite", "膨潤石", "smectite", tier, why)
+    elif e14 and not EG:
+        add("smectite", "膨潤石或蛭石", "smectite or vermiculite", "check",
+            "AD %.1f Å；需要 EG 圖譜才能判斷是否會膨脹" % e14["d"])
+    elif EG and _oor(EG, "S17"):
+        notes.append("EG 圖譜沒有涵蓋 17 Å（約 5° 2θ, Cu Kα），無法判斷膨潤石；10 Å 峰的指標也可能受膨潤石影響。"
+                     "定向片建議從 2–3° 2θ 開始量測。")
+    if ml:
+        add("mixed", "混層黏土（如伊萊石/膨潤石 I/S）", "mixed-layer clay (e.g. I/S)", "possible",
+            "EG 在 %.1f Å 有寬峰（介於 10 與 17 Å 之間）" % ml["d"])
+
+    # 伊萊石／雲母
+    eg10, ad10 = _cp(EG, "I10"), _cp(AD, "I10")
+    if eg10 or ad10:
+        parts = []
+        if eg10 and ad10:
+            parts.append("AD %.2f Å、EG %.2f Å（乙二醇處理不移動）" % (ad10["d"], eg10["d"]))
+        else:
+            parts.append("%.2f Å" % (eg10 or ad10)["d"])
+        i5 = _cp(EG, "I5") or _cp(AD, "I5")
+        if i5:
+            parts.append("%.2f Å (002)" % i5["d"])
+        shift_is = eg10 and ad10 and ad10["d"] - eg10["d"] >= 0.08
+        if shift_is:
+            parts[0] = "AD %.2f Å → EG %.2f Å" % (ad10["d"], eg10["d"])
+        elif eg10 and ad10 and ad10["fwhm"] > 1.25 * eg10["fwhm"]:
+            parts.append("AD 的 10 Å 峰比 EG 寬，可能夾有少量膨脹層")
+        lost = ad10 and EG and not eg10 and not _oor(EG, "I10")
+        if lost:
+            parts.append("但 EG 沒有 10 Å 峰")
+        add("illite", "伊萊石／雲母", "illite/mica",
+            "possible" if lost else ("certain" if (i5 or (eg10 and ad10)) else "possible"), "；".join(parts))
+        if lost:
+            add("expandable", "膨脹性黏土（膨潤石層）", "expandable clay (smectite layers)", "check",
+                "AD 的 %.2f Å 峰在乙二醇處理後消失，可能是含膨脹層的黏土移到更大的 d 值" % ad10["d"])
+        if shift_is and not ml:
+            add("mixed", "伊萊石/膨潤石混層（I/S，以伊萊石為主）", "illite-rich illite/smectite (I/S)", "possible",
+                "10 Å 峰在 AD 偏向大 d 值且較寬（%.2f Å，半高寬 %.2f°），乙二醇處理後變回 %.2f Å（%.2f°）：含少量膨脹層"
+                % (ad10["d"], ad10["fwhm"], eg10["d"], eg10["fwhm"]))
+
+    # 綠泥石／蛭石：AD 的 14 Å 容易和膨潤石重疊，有 EG 時只看 EG
+    if EG:
+        c14, c354, c47 = _cp(EG, "C14"), _cp(EG, "C354"), _cp(EG, "C47")
+    else:
+        c14 = _cp(AD, "C14")
+        c14 = c14 if c14 and c14["fwhm"] <= 0.8 else None
+        c354, c47 = _cp(AD, "C354"), _cp(AD, "C47")
+    if c14 or c354:
+        why = []
+        if c14:
+            why.append("%.1f Å%s" % (c14["d"], "（EG 不膨脹）" if _cp(EG, "C14") else ""))
+        if c47:
+            why.append("%.2f Å" % c47["d"])
+        if c354:
+            why.append("%.2f Å" % c354["d"])
+        if H:
+            if _cp(H, "C14"):
+                add("chlorite", "綠泥石", "chlorite", "certain", "、".join(why) + "；加熱後 14 Å 仍在")
+            elif c14:
+                add("vermiculite", "蛭石", "vermiculite", "possible", "、".join(why) + "；加熱後 14 Å 消失（塌陷）")
+            else:
+                add("chlorite", "綠泥石", "chlorite", "possible", "、".join(why))
+        else:
+            if c14 and c354:
+                add("chlorite", "綠泥石", "chlorite", "certain" if c47 else "possible", "、".join(why))
+            else:
+                add("chlorite", "綠泥石或蛭石", "chlorite or vermiculite", "possible",
+                    "、".join(why) + "；加熱到 550 °C 可以區分")
+
+    # 高嶺石／埃洛石
+    k7 = _cp(EG, "K7") or _cp(AD, "K7")
+    k7x = _cp(EG, "K7x") or _cp(AD, "K7x")
+    k358 = _cp(EG, "K358") or _cp(AD, "K358")
+    if k7 or k358 or k7x:
+        why = []
+        if k7 or k7x:
+            why.append("%.2f Å" % (k7 or k7x)["d"])
+        if k358:
+            why.append("%.2f Å (002)" % k358["d"])
+        if H5 and not (_cp(H5, "K7") or _cp(H5, "K7x")):
+            add("kaolinite", "高嶺石", "kaolinite", "certain", "、".join(why) + "；550 °C 加熱後 7 Å 峰消失")
+        elif H5 and not k358:
+            add("kaolinite", "高嶺石（可能）", "kaolinite (possible)", "check",
+                "、".join(why) + "；550 °C 加熱後 7 Å 仍有峰，可能多為綠泥石")
+        elif k358:
+            add("kaolinite", "高嶺石", "kaolinite", "certain", "、".join(why))
+        elif not (c14 or c354):
+            add("kaolinite", "高嶺石", "kaolinite", "possible", "、".join(why) + "（沒有綠泥石的峰）")
+        else:
+            add("kaolinite", "高嶺石（可能）", "kaolinite (possible)", "check",
+                "、".join(why) + "；7 Å 也可能是綠泥石的 002，3.58 Å 峰不明顯")
+        h10 = _cp(FA, "H10")
+        kk = k7 or k7x
+        if FA and h10:
+            add("halloysite", "埃洛石", "halloysite", "certain", "甲醯胺處理後出現 %.1f Å 峰（7 Å 層膨脹）" % h10["d"])
+        elif FA:
+            notes.append("甲醯胺處理後沒有 10.4 Å 峰：7 Å 礦物以高嶺石為主。")
+        else:
+            broad = k7x if (k7 and k7x and k7x["fwhm"] > 0.6 and k7x["d"] >= 7.15 and k7x["area"] >= 0.5 * k7["area"]) else None
+            why_h = []
+            if kk and kk["fwhm"] > 0.55:
+                why_h.append("7 Å 峰偏寬（半高寬 %.2f°）" % kk["fwhm"])
+            if kk and kk["d"] >= 7.25:
+                why_h.append("7 Å 峰的 d 值偏大（%.2f Å）" % kk["d"])
+            if broad:
+                why_h.append("7 Å 峰帶有寬的成分（%.2f Å，半高寬 %.2f°）" % (broad["d"], broad["fwhm"]))
+            if why_h:
+                add("halloysite", "埃洛石（可能）", "halloysite (possible)", "check",
+                    "、".join(why_h) + "；甲醯胺測試可以確認")
+    if not out:
+        notes.append("沒有偵測到明顯的黏土礦物底面峰。")
+    return out, notes
+
+
+def clay_biscaye(F, interp, seed=0):
+    """Biscaye (1965)：EG 圖譜 17 Å ×1、10 Å ×4、7 Å ×2；高嶺石／綠泥石依 3.58／3.54 Å 面積比分配。"""
+    EG = F.get("EG")
+    if not EG:
+        return dict(ok=False, why="需要 EG（乙二醇）圖譜。")
+    if _oor(EG, "S17") or _oor(EG, "I10") or _oor(EG, "K7"):
+        return dict(ok=False, why="EG 圖譜沒有涵蓋 17、10、7 Å 三個峰的範圍（約 4–14° 2θ, Cu Kα）。")
+
+    def A(*keys):
+        a = s = 0.0
+        for kk in keys:
+            c = _cp(EG, kk)
+            if c:
+                a += c["area"]
+                s = math.hypot(s, c["sd"])
+        return a, s
+
+    aS, aI, a7 = A("S17"), A("I10"), A("K7", "K7x")
+    aK, aC = A("K358"), A("C354")
+    warn = []
+    has_chl = any(m["key"] in ("chlorite", "vermiculite") for m in interp)
+    has_kao = any(m["key"] in ("kaolinite", "halloysite") for m in interp)
+    if aK[0] + aC[0] > 0:
+        split = None
+    elif _oor(EG, "K358"):
+        split = 0.5 if (has_chl and has_kao) else (0.0 if has_chl else 1.0)
+        warn.append("EG 圖譜沒有涵蓋 3.58／3.54 Å（約 25° 2θ），高嶺石與綠泥石無法分開。")
+    else:
+        split = 0.5 if (has_chl and has_kao) else (0.0 if has_chl else 1.0)
+        if has_chl and has_kao:
+            warn.append("3.58／3.54 Å 峰太弱，高嶺石與綠泥石暫以各半分配。")
+    rng = np.random.default_rng(seed)
+    N = 4000
+
+    def draw(v):
+        return np.clip(v[0] + v[1] * rng.standard_normal(N), 0.0, None)
+
+    def comp(S_, I_, K7_, k_, c_):
+        if split is None:
+            fr = np.where(k_ + c_ > 0, k_ / np.maximum(k_ + c_, 1e-300), 0.5)
+        else:
+            fr = split
+        W = np.array([S_, 4.0 * I_, 2.0 * K7_ * fr, 2.0 * K7_ * (1 - fr)], dtype=float)
+        tot = W.sum(0)
+        return 100.0 * W / np.where(tot > 0, tot, np.nan)
+
+    nom = comp(aS[0], aI[0], a7[0], aK[0], aC[0])
+    if not np.all(np.isfinite(nom)):
+        return dict(ok=False, why="EG 圖譜上沒有偵測到 17、10、7 Å 的峰。")
+    mc = comp(draw(aS), draw(aI), draw(a7), draw(aK), draw(aC))
+    sd = np.nanstd(mc, axis=1)
+    if _cp(EG, "ML") and _cp(EG, "ML")["area"] > 0.2 * max(aS[0], 1e-30):
+        warn.append("有混層黏土的寬峰（未計入四種礦物的比例）。")
+    bulk = EG.get("qz_ratio", 0) > 3
+    if bulk:
+        warn.insert(0, "石英的 3.34 Å 峰遠強於黏土的底面峰（約 %.0f 倍），這看起來是全岩隨機粉末而不是 <2 µm 黏土定向片。"
+                       "Biscaye 半定量是為定向片設計的，這裡的比例只能當參考；全岩的含量請用「全岩粉末」的 RIR 半定量。"
+                    % min(EG["qz_ratio"], 999))
+    names = ["Smectite", "Illite", "Kaolinite", "Chlorite"]
+    return dict(ok=True, pct={n: float(v) for n, v in zip(names, nom)}, sd={n: float(v) for n, v in zip(names, sd)},
+                areas=dict(S17=aS[0], I10=aI[0], K7=a7[0], K358=aK[0], C354=aC[0]), warn=warn, bulk=bulk)
+
+
+def clay_indices(F):
+    EG, AD = F.get("EG"), F.get("AD")
+    out = {}
+    if _cp(AD, "I10"):
+        out["KI_AD"] = _cp(AD, "I10")["fwhm"]
+    if _cp(EG, "I10"):
+        out["KI_EG"] = _cp(EG, "I10")["fwhm"]
+    i5, i10 = _cp(EG, "I5"), _cp(EG, "I10")
+    if i5 and i10:
+        r = i5["area"] / i10["area"]
+        out["Esq"] = r
+        out["Esq_sd"] = r * math.hypot(i5["sd"] / i5["area"], i10["sd"] / i10["area"])
+    if _cp(EG, "S17"):
+        out["Sm_FWHM"] = _cp(EG, "S17")["fwhm"]
+    return out
+
+
+def _clay_model(fit, w):
+    """某一區間的擬合曲線（含背景）與各峰的曲線"""
+    x = fit["x"]
+    m = (x >= w["a"]) & (x <= w["b"])
+    xw = x[m]
+    res = w["res"]
+    u = (xw - res["xm"]) / res["xs"]
+    bgc = sum(res["bgc"][p] * u ** p for p in range(res["deg"] + 1)) + fit["bg"][m]
+    parts = []
+    for c in res["comps"]:
+        if c["area"] > 0:
+            parts.append((c["key"], c["area"] * _pv_ka(xw, c["t"], c["fwhm"], c["eta"], res.get("ka2", False))))
+    total = bgc + (np.sum([p for _, p in parts], 0) if parts else 0)
+    return xw, bgc, parts, total
+
+
+def _quartz_peaks(fit):
+    """石英 4.26 Å 與 3.34 Å 兩根峰都明顯存在時，回傳它們的 2θ（只用來在圖上標示 Q）"""
+    x, yb, nz = fit["x"], fit["y"] - fit["bg"], fit["noise"]
+    pos = []
+    for d in (4.257, 3.343):
+        t = _t_of_d(d)
+        m = (x > t - 0.12) & (x < t + 0.12)
+        side = ((x > t - 0.6) & (x < t - 0.3)) | ((x > t + 0.3) & (x < t + 0.6))
+        if m.sum() < 3 or side.sum() < 3:
+            return []
+        j = int(np.argmax(np.where(m, yb, -np.inf)))
+        if yb[j] < 8 * nz + np.median(yb[side]) or not (yb[j] >= yb[max(j - 1, 0)] and yb[j] >= yb[min(j + 1, len(x) - 1)]):
+            return []
+        pos.append(float(x[j]))
+    return pos
+
+
+def clay_figure(sample, S=None, fmt="png", dpi=300, width_mm=180):
+    """單一樣品各處理的圖譜（上到下 AD、EG、加熱、FA），標出擬合的底面峰（期刊風格，英文標示）。"""
+    S = merge_settings(S or {})
+    fits = [sample["fits"][t] for t in CLAY_ORDER if t in sample["fits"]]
+    n = len(fits)
+    W = width_mm / 25.4
+    H = W * (0.30 + 0.17 * n)
+    with matplotlib.rc_context(make_rc(S)):
+        fig = Figure(figsize=(W, H), dpi=dpi)
+        FigureCanvasAgg(fig)
+        ax = fig.add_axes([0.07, 0.11, 0.86, 0.80])
+        lo = min(max(f["x"][0], 2.5) for f in fits)
+        hi = max(min(f["x"][-1], 30.0) for f in fits)
+        lw = S["lw"]
+        GAP = 1.38
+        for i, f in enumerate(fits):
+            off = (n - 1 - i) * GAP
+            x, y = f["x"], f["y"]
+            m = (x >= lo) & (x <= hi)
+            ref = (x >= max(lo, 3.5)) & (x <= hi)
+            clay = (x >= max(lo, 3.5)) & (x <= 14.0)
+            sc_all = float(np.max(y[ref])) if ref.sum() > 5 else float(y[m].max())
+            sc = float(np.max(y[clay])) if clay.sum() > 5 else sc_all
+            sc = sc if sc > 0 else (sc_all if sc_all > 0 else 1.0)
+            # 全岩粉末的石英峰常遠強於黏土峰：以 4–14° 的黏土區間定比例，超出的峰截斷（圖中以 // 標示）
+            yy_n = y[m] / sc
+            clip = 1.12
+            ax.plot(x[m], np.minimum(yy_n, clip) + off, color="black", lw=lw * 0.8, zorder=3)
+            over = yy_n > clip
+            if over.any():
+                idx = np.where(over)[0]
+                runs = np.split(idx, np.where(np.diff(idx) > 1)[0] + 1)
+                for r_ in runs:
+                    xm_ = float(x[m][r_].mean())
+                    ax.text(xm_, off + clip, "//", ha="center", va="center", fontsize=S["fs_tick"] * 0.8, rotation=0,
+                            zorder=5, bbox=dict(boxstyle="square,pad=0.02", fc="white", ec="none"))
+            for w in f["wins"]:
+                xw, bgc, parts, total = _clay_model(f, w)
+                for key, p in parts:
+                    if not f["comps"].get(key, {}).get("present"):
+                        continue
+                    ax.fill_between(xw, bgc / sc + off, (bgc + p) / sc + off, color=CLAY_COL.get(key, "#999999"),
+                                    alpha=0.45, lw=0, zorder=1)
+            ax.text(0.003, off + 0.55, CLAY_TREAT_FIG[f["treat"]], transform=blended_transform_factory(ax.transAxes, ax.transData),
+                    ha="left", va="bottom", fontsize=S["fs_legend"], fontweight="bold")
+            # 峰位標示：d 值（Å）與礦物縮寫
+            lab = []
+            for key in ("S17", "E14", "ML", "C14", "H10", "I10", "K7", "I5"):
+                c = _cp(f, key)
+                if c and lo < c["t"] < hi:
+                    lab.append((c["t"], "%.1f" % c["d"] if c["d"] >= 9.5 else "%.2f" % c["d"], CLAY_ABBR[key]))
+            k3, c3 = _cp(f, "K358"), _cp(f, "C354")
+            if k3 and c3:
+                lab.append(((k3["t"] + c3["t"]) / 2, "3.58/3.54", "Kln/Chl"))
+            elif k3 or c3:
+                cc = k3 or c3
+                lab.append((cc["t"], "%.2f" % cc["d"], "Kln" if k3 else "Chl"))
+            lab += [(t, "%.2f" % _d_of_t(t), "Qz") for t in _quartz_peaks(f) if lo < t < hi]
+            # 太靠近的標示合併成一個（例如 AD 的 14.6 Å 膨潤石與 14.2 Å 綠泥石）
+            lab.sort()
+            merged = []
+            for t, dtxt, ab in lab:
+                if merged and t - merged[-1][3] < 0.8:
+                    m0 = merged[-1]
+                    merged[-1] = ((m0[0] + t) / 2, m0[1] + "/" + dtxt,
+                                  m0[2] if ab in m0[2].split("/") else m0[2] + "/" + ab, t)
+                else:
+                    merged.append((t, dtxt, ab, t))
+            for t, dtxt, ab, _t2 in merged:
+                j = int(np.argmin(np.abs(x - t)))
+                yy = float(np.max(y[max(0, j - 12):j + 13])) / sc + off
+                ax.annotate(dtxt + "\n" + ab, (t, min(yy, off + 1.12)), xytext=(0, 1.5), textcoords="offset points",
+                            ha="center", va="bottom", fontsize=S["fs_tick"] * 0.85, linespacing=0.95, zorder=4)
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(-0.06, (n - 1) * GAP + 1.42)
+        ax.set_yticks([])
+        ax.set_xlabel("2θ (°, Cu Kα)", fontsize=S["fs_label"])
+        ax.set_ylabel("Intensity (a.u.)", fontsize=S["fs_label"])
+        ax.xaxis.set_major_locator(ticker.MultipleLocator(5))
+        ax.xaxis.set_minor_locator(ticker.MultipleLocator(1))
+        ax.tick_params(axis="x", which="both", top=False)
+        sec = ax.secondary_xaxis("top", functions=(lambda t: TAG_WL / (2 * np.sin(np.radians(np.clip(t, 0.5, 170) / 2))),
+                                                    lambda d: 2 * np.degrees(np.arcsin(np.clip(TAG_WL / (2 * np.clip(d, 0.5, None)), 0, 1)))))
+        sec.set_xticks([v for v in (17, 14, 10, 7, 5, 4, 3.5) if lo < _t_of_d(v) < hi])
+        sec.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _p: ("%.1f" % v).rstrip("0").rstrip(".")))
+        sec.set_xlabel("d (Å)", fontsize=S["fs_label"])
+        sec.tick_params(labelsize=S["fs_tick"])
+        handles = [Line2D([0], [0], color=BISCAYE_COL[k], lw=5, alpha=0.6) for k in ("Smectite", "Illite", "Kaolinite", "Chlorite")]
+        ax.legend(handles, ["Sme smectite", "Ilt illite", "Kln kaolinite", "Chl chlorite"], loc="upper right", frameon=False,
+                  fontsize=S["fs_legend"] * 0.9, ncol=4, handlelength=1.0, columnspacing=1.0, borderaxespad=0.2)
+        buf = io.BytesIO()
+        fig.savefig(buf, format=fmt, dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=0.03)
+    return buf.getvalue()
+
+
+def clay_bar_figure(samples, S=None, fmt="png", dpi=300, width_mm=89):
+    """Biscaye 半定量結果的橫向堆疊長條圖（每個樣品一列）"""
+    S = merge_settings(S or {})
+    rows = [s for s in samples if s.get("bisc", {}).get("ok")]
+    if not rows:
+        raise UserError("沒有可畫的半定量結果（需要 EG 圖譜）。")
+    names = ["Smectite", "Illite", "Kaolinite", "Chlorite"]
+    W = width_mm / 25.4
+    H = 0.55 + 0.17 * len(rows) + 0.35
+    with matplotlib.rc_context(make_rc(S)):
+        fig = Figure(figsize=(W, H), dpi=dpi)
+        FigureCanvasAgg(fig)
+        ax = fig.add_subplot(111)
+        for i, s in enumerate(rows):
+            left = 0.0
+            for nm in names:
+                v = s["bisc"]["pct"][nm]
+                ax.barh(i, v, left=left, height=0.7, color=BISCAYE_COL[nm], edgecolor="white", lw=0.3)
+                if v >= 8:
+                    ax.text(left + v / 2, i, "%.0f" % v, ha="center", va="center", fontsize=S["fs_tick"] * 0.85,
+                            color="white" if nm in ("Illite", "Kaolinite") else "black")
+                left += v
+        ax.set_yticks(range(len(rows)))
+        ax.set_yticklabels([s["sample"] for s in rows], fontsize=S["fs_tick"])
+        ax.invert_yaxis()
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("Relative abundance (%)", fontsize=S["fs_label"])
+        ax.xaxis.set_major_locator(ticker.MultipleLocator(20))
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+        ax.legend([Line2D([0], [0], color=BISCAYE_COL[n], lw=6) for n in names], names, loc="lower center",
+                  bbox_to_anchor=(0.5, 1.0), ncol=4, frameon=False, fontsize=S["fs_legend"], handlelength=1.0,
+                  columnspacing=0.9)
+        buf = io.BytesIO()
+        fig.savefig(buf, format=fmt, dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=0.03)
+    return buf.getvalue()
+
+
+def _f(v, nd=2):
+    return "" if v is None else ("%.*f" % (nd, v))
+
+
+def clay_csv(samples):
+    """結果表（每個樣品一列）與峰擬合明細"""
+    o = io.StringIO()
+    w = csv.writer(o)
+    w.writerow(["sample", "treatments", "smectite_%", "smectite_sd", "illite_%", "illite_sd", "kaolinite_%", "kaolinite_sd",
+                "chlorite_%", "chlorite_sd", "Kubler_index_AD_deg2theta", "Kubler_index_EG_deg2theta",
+                "Esquevin_index_5A_10A", "Esquevin_sd", "smectite_FWHM_EG_deg2theta", "minerals", "notes"])
+    for s in samples:
+        b, ix = s["bisc"], s["indices"]
+        p, sd = (b.get("pct", {}), b.get("sd", {})) if b.get("ok") else ({}, {})
+        w.writerow([s["sample"], " ".join(t for t in CLAY_ORDER if t in s["fits"])]
+                   + sum([[_f(p.get(n), 1), _f(sd.get(n), 1)] for n in ("Smectite", "Illite", "Kaolinite", "Chlorite")], [])
+                   + [_f(ix.get("KI_AD"), 3), _f(ix.get("KI_EG"), 3), _f(ix.get("Esq"), 3), _f(ix.get("Esq_sd"), 3),
+                      _f(ix.get("Sm_FWHM"), 3), "; ".join(m["en"] for m in s["minerals"]),
+                      " | ".join(b.get("warn", []) + ([b["why"]] if not b.get("ok") else []))])
+    p = io.StringIO()
+    w2 = csv.writer(p)
+    w2.writerow(["sample", "treatment", "peak", "mineral", "d_A", "two_theta_CuKa1", "FWHM_deg2theta", "area", "area_sd", "detected"])
+    for s in samples:
+        for t in CLAY_ORDER:
+            f = s["fits"].get(t)
+            if not f:
+                continue
+            for kk, c in f["comps"].items():
+                w2.writerow([s["sample"], t, kk, CLAY_ABBR.get(kk, ""), _f(c.get("d"), 3), _f(c.get("t"), 3),
+                             _f(c.get("fwhm"), 3), _f(c.get("area"), 4), _f(c.get("sd"), 4),
+                             "out of range" if c.get("oor") else ("yes" if c.get("present") else "no")])
+    return o.getvalue(), p.getvalue()
+
+
+CLAY_REFS = {
+    "biscaye": "Biscaye, P.E., 1965. Mineralogy and sedimentation of recent deep-sea clay in the Atlantic Ocean and adjacent seas and oceans. Geological Society of America Bulletin 76, 803–832.",
+    "mr": "Moore, D.M., Reynolds, R.C., Jr., 1997. X-Ray Diffraction and the Identification and Analysis of Clay Minerals, 2nd ed. Oxford University Press, New York.",
+    "kubler": "Kübler, B., 1964. Les argiles, indicateurs de métamorphisme. Revue de l'Institut Français du Pétrole 19, 1093–1112.",
+    "warr": "Warr, L.N., Rice, A.H.N., 1994. Interlaboratory standardization and calibration of clay mineral crystallinity and crystallite size data. Journal of Metamorphic Geology 12, 141–152.",
+    "esq": "Esquevin, J., 1969. Influence de la composition chimique des illites sur leur cristallinité. Bulletin du Centre de Recherches de Pau-SNPA 3, 147–153.",
+    "snip": "Ryan, C.G., Clayton, E., Griffin, W.L., Sie, S.H., Cousens, D.R., 1988. SNIP, a statistics-sensitive background treatment for the quantitative analysis of PIXE spectra in geoscience applications. Nuclear Instruments and Methods in Physics Research B 34, 396–402.",
+    "church": "Churchman, G.J., Whitton, J.S., Claridge, G.G.C., Theng, B.K.G., 1984. Intercalation method using formamide for differentiating halloysite from kaolinite. Clays and Clay Minerals 32, 241–248.",
+}
+
+
+def clay_methods(samples, sync_wl=None):
+    treats = [t for t in CLAY_ORDER if any(t in s["fits"] for s in samples)]
+    tr = [CLAY_TREAT_EN[t] for t in treats]
+    tr_txt = ", ".join(tr[:-1]) + (" and " if len(tr) > 1 else "") + tr[-1] if tr else "untreated"
+    has_bisc = any(s["bisc"].get("ok") for s in samples)
+    has_ki = any("KI_AD" in s["indices"] or "KI_EG" in s["indices"] for s in samples)
+    has_esq = any("Esq" in s["indices"] for s in samples)
+    refs = ["mr", "snip"]
+    p = ["Clay minerals were identified from the basal reflections of oriented mounts measured %s "
+         "(Moore and Reynolds, 1997)." % tr_txt]
+    if sync_wl:
+        p.append("Synchrotron patterns (λ = %s Å) were converted to the 2θ scale of Cu Kα1 radiation (λ = 1.540598 Å) "
+                 "with Bragg's law before analysis." % wl(sync_wl))
+    p.append("After subtraction of a SNIP background (Ryan et al., 1988), the basal reflections were decomposed into "
+             "pseudo-Voigt profiles by non-linear least-squares fitting, and peak positions were converted to d-spacings.")
+    if "FA" in treats:
+        refs.append("church")
+        p.append("Halloysite was distinguished from kaolinite by formamide intercalation (Churchman et al., 1984).")
+    if has_bisc:
+        refs.append("biscaye")
+        p.append("Semi-quantitative proportions of smectite, illite, kaolinite and chlorite were estimated from the EG "
+                 "patterns using the integrated areas of the 17 Å (smectite), 10 Å (illite) and 7 Å (kaolinite + chlorite) "
+                 "reflections weighted by factors of 1, 4 and 2, respectively (Biscaye, 1965); kaolinite and chlorite "
+                 "were apportioned according to the area ratio of their 3.58 Å and 3.54 Å reflections. The four groups "
+                 "were assumed to sum to 100%. Reported uncertainties (1σ) reflect peak-fitting errors only and do not "
+                 "include sample-preparation effects.")
+    if has_ki:
+        refs += ["kubler", "warr"]
+        p.append("Illite crystallinity (Kübler index) is given as the full width at half maximum of the 10 Å reflection "
+                 "in Δ°2θ (Cu Kα) (Kübler, 1964), without calibration to the Crystallinity Index Standard scale "
+                 "(Warr and Rice, 1994).")
+    if has_esq:
+        refs.append("esq")
+        p.append("The illite chemistry index was calculated as the ratio of the 5 Å to 10 Å peak areas on the EG "
+                 "patterns (Esquevin, 1969).")
+    p.append("Data processing was carried out with XRD Studio v%s." % APP_VERSION)
+    order = ["biscaye", "church", "esq", "kubler", "mr", "snip", "warr"]
+    return " ".join(p) + "\n\nReferences\n" + "\n".join(CLAY_REFS[r] for r in order if r in refs)
+
+
+def _png_data_url(b):
+    import base64
+    return "data:image/png;base64," + base64.b64encode(b).decode("ascii")
+
+
+def clay_run(S, items, a):
+    """分析多個樣品；a["groups"] = [{sample, files: [{id, treat}]}]"""
+    groups = a.get("groups") or []
+    if not groups:
+        raise UserError("請先指定每個檔案的樣品與處理方式。")
+    samples, sync_wl = [], None
+    for g in groups:
+        fits, files = {}, {}
+        for f in g.get("files") or []:
+            iid, treat = f.get("id"), f.get("treat")
+            if iid not in DATA or treat not in CLAY_WINDOWS:
+                continue
+            if treat in fits:
+                raise UserError("樣品「%s」有兩個「%s」檔案，請只保留一個。" % (g.get("sample"), CLAY_TREAT_ZH[treat]))
+            d0 = DATA[iid]
+            eff = effective(d0, S)
+            if eff["type"] != "inhouse" and eff["convert"]:
+                sync_wl = eff["src"]
+            it = next((i for i in items if i.get("id") == iid), {})
+            x, y, _ = converted_xy(d0, eff)
+            x = x + (fnum(it.get("shift"), 0.0) or 0.0)
+            fits[treat] = clay_fit_pattern(x, y, treat, ka2=eff["type"] == "inhouse")
+            files[treat] = dict(id=iid, name=d0["name"], sync=eff["type"] != "inhouse")
+        if not fits:
+            continue
+        minerals, notes = clay_interpret(fits)
+        bisc = clay_biscaye(fits, minerals)
+        ix = clay_indices(fits)
+        if any(v["sync"] for v in files.values()):
+            notes.append("同步輻射數據：Biscaye 權重與 Kübler 指數是以實驗室 Cu 繞射儀建立的，數值不宜直接和文獻比較。")
+        samples.append(dict(sample=str(g.get("sample") or "sample"), fits=fits, files=files, minerals=minerals,
+                            notes=notes, bisc=bisc, indices=ix))
+    if not samples:
+        raise UserError("沒有可分析的檔案。")
+    CLAY_LAST.clear()
+    CLAY_LAST.update(samples=samples, sync_wl=sync_wl)
+    out = []
+    for s in samples:
+        comps = {t: [dict(key=kk, abbr=CLAY_ABBR.get(kk, ""), d=c.get("d"), t=c.get("t"), fwhm=c.get("fwhm"),
+                          area=c.get("area"), sd=c.get("sd"), present=bool(c.get("present")), oor=bool(c.get("oor")))
+                     for kk, c in f["comps"].items()] for t, f in s["fits"].items()}
+        out.append(dict(sample=s["sample"], treats=[t for t in CLAY_ORDER if t in s["fits"]], files=s["files"],
+                        minerals=s["minerals"], notes=s["notes"], bisc=s["bisc"], indices=s["indices"], comps=comps,
+                        fig=_png_data_url(clay_figure(s, S, "png", dpi=110, width_mm=150))))
+    return dict(samples=out, methods=clay_methods(samples, sync_wl))
+
+
+def clay_export(S, a):
+    """下載：結果表、峰擬合明細、方法說明、每個樣品的圖（PNG + PDF）、組成長條圖"""
+    samples = CLAY_LAST.get("samples")
+    if not samples:
+        raise UserError("請先執行黏土分析。")
+    res, peaks = clay_csv(samples)
+    files = [("clay_results.csv", "﻿" + res), ("clay_peak_fits.csv", "﻿" + peaks),
+             ("methods.txt", clay_methods(samples, CLAY_LAST.get("sync_wl")))]
+    for s in samples:
+        nm = safe_name(s["sample"], "sample")
+        files.append(("figures/%s.png" % nm, clay_figure(s, S, "png", dpi=600)))
+        files.append(("figures/%s.pdf" % nm, clay_figure(s, S, "pdf")))
+    if any(s["bisc"].get("ok") for s in samples):
+        files.append(("figures/composition.png", clay_bar_figure(samples, S, "png", dpi=600)))
+        files.append(("figures/composition.pdf", clay_bar_figure(samples, S, "pdf")))
+    return {"name": "clay_minerals.zip", "mime": "application/zip"}, make_zip(files)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2364,6 +3848,25 @@ def _api(cmd, a):
         return id_auto(merge_settings(S_in), items, a)
     if cmd == "id_ref":
         return id_ref(a), None
+    if cmd == "rv_package":
+        return rietveld_package(merge_settings(S_in), items, a)
+    if cmd == "rv_load":
+        return rv_load(a), None
+    if cmd == "rv_render":
+        S = merge_settings(S_in)
+        if a.get("export"):
+            fmt = S["fmt"]
+            dpi = float(S["dpi"]) if fmt in ("png", "tiff") else 300
+            data, info = rietveld_figure(S_in, a.get("opts") or {}, fmt, dpi)
+            return dict(info, name=safe_name(S["fig_name"]) + "_Rietveld." + FMT_EXT[fmt], mime=FMT_MIME[fmt]), data
+        data, info = rietveld_figure(S_in, a.get("opts") or {}, "png", 160)
+        return dict(info, fig=_png_data_url(data)), None
+    if cmd == "quant_export":
+        return quant_export(merge_settings(S_in), a)
+    if cmd == "clay_run":
+        return clay_run(merge_settings(S_in), items, a), None
+    if cmd == "clay_export":
+        return clay_export(merge_settings(S_in), a)
     if cmd == "id_names":
         db = mindb()
         return dict(names=db["names"], version=db["version"], cite=db["cite"], n=len(db["e"])), None
